@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>xy-graph-gen — Formula Grapher</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #f8fafc;
+    color: #0f172a;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
+  header h1 { font-size: 22px; margin: 0 0 4px; }
+  header p { color: #64748b; margin: 0 0 20px; font-size: 14px; }
+  .form { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .form input[type=text] {
+    flex: 1; min-width: 240px; font-size: 16px; padding: 10px 14px;
+    border: 1px solid #cbd5e1; border-radius: 8px;
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  .form input[type=text]:focus { outline: 2px solid #bfdbfe; border-color: #2563eb; }
+  .form button {
+    padding: 10px 22px; font-size: 15px; font-weight: 600;
+    background: #2563eb; color: #fff; border: none; border-radius: 8px; cursor: pointer;
+  }
+  .form button:hover { background: #1d4ed8; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .chip {
+    font-family: ui-monospace, Consolas, monospace; font-size: 13px;
+    padding: 5px 12px; border: 1px solid #cbd5e1; border-radius: 999px;
+    background: #fff; cursor: pointer; color: #334155;
+  }
+  .chip:hover { background: #eef2ff; border-color: #818cf8; }
+  #solved {
+    font-size: 15px; margin: 0 0 12px; min-height: 22px;
+    font-family: ui-monospace, Consolas, monospace; color: #1e293b;
+  }
+  #error {
+    color: #b91c1c; background: #fef2f2; border: 1px solid #fecaca;
+    padding: 10px 14px; border-radius: 8px; margin: 0 0 12px; font-size: 14px; display: none;
+  }
+  .graphbox { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; }
+  canvas { width: 100%; height: auto; display: block; }
+  .meta { font-size: 12.5px; color: #64748b; margin-top: 8px; }
+  .tablebox { margin-top: 16px; background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; }
+  .tablebox h2 { font-size: 14px; margin: 0; padding: 10px 14px; border-bottom: 1px solid #e2e8f0; color: #334155; }
+  .table-scroll { max-height: 220px; overflow: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; font-family: ui-monospace, Consolas, monospace; }
+  th, td { padding: 5px 14px; text-align: right; border-bottom: 1px solid #f1f5f9; }
+  th { position: sticky; top: 0; background: #f8fafc; color: #475569; }
+  tbody tr:nth-child(even) { background: #f8fafc; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>xy-graph-gen</h1>
+    <p>Enter an equation in x and y — it is solved for y and plotted for x = 1 … 100, with (0,0) at the centre of the graph.</p>
+  </header>
+
+  <form class="form" id="form">
+    <input type="text" id="formula" value="x + y = 3" spellcheck="false" autocomplete="off" placeholder="e.g. x + y = 3">
+    <button type="submit">Plot</button>
+  </form>
+
+  <div class="chips" id="chips">
+    <button class="chip" type="button">x + y = 3</button>
+    <button class="chip" type="button">y = 2x + 1</button>
+    <button class="chip" type="button">2x + 3y = 6</button>
+    <button class="chip" type="button">y = x^2 − 10x + 10</button>
+  </div>
+
+  <p id="solved"></p>
+  <div id="error"></div>
+
+  <div class="graphbox">
+    <canvas id="graph" width="900" height="640"></canvas>
+    <div class="meta" id="meta"></div>
+  </div>
+
+  <div class="tablebox">
+    <h2>Points (x = 1 … 100)</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>x</th><th>y</th></tr></thead>
+        <tbody id="points"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* ================= parsing & solving ================= */
+
+function fmt(n) {
+  if (Object.is(n, -0)) n = 0;
+  if (Number.isInteger(n)) return String(n);
+  return String(parseFloat(n.toPrecision(12)));
+}
+
+// Smallest "nice" number (1, 2, 5 × 10^k) that is >= v
+function niceCeil(v) {
+  if (!(v > 0)) return 1;
+  const mag = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 2, 5, 10]) {
+    const c = m * mag;
+    if (c >= v) return c;
+  }
+  return 10 * mag;
+}
+
+// Parse one term like "3", "-2x", "x^3", "y", "+0.5x"
+function parseTerm(t) {
+  const m = t.match(/^([+-]?)(\d*\.?\d*)?([xy]?)(?:\^(\d+))?$/);
+  if (!m) return null;
+  // NB: the optional coefficient group is `undefined` (not '') when it matches
+  // empty (e.g. bare "x" or "y"), so treat falsy as an implicit 1.
+  const cStr = m[2];
+  let coeff = cStr ? parseFloat(cStr) : 1;
+  if (!isFinite(coeff)) return null;
+  if (m[1] === '-') coeff = -coeff;
+  return { coeff: coeff, varName: m[3] || '', exp: m[4] ? parseInt(m[4], 10) : 1 };
+}
+
+// Split "2x-3y+5" into ["2x", "-3y", "+5"]
+function tokenizeSide(s) {
+  const tokens = [];
+  let i = 0;
+  while (i < s.length) {
+    let sign = '+';
+    if (s[i] === '+' || s[i] === '-') { sign = s[i]; i++; }
+    let j = i;
+    while (j < s.length && s[j] !== '+' && s[j] !== '-') j++;
+    if (j > i) {
+      const body = s.slice(i, j).trim();
+      if (body) tokens.push((sign === '-' ? '-' : '') + body);
+    }
+    i = j;
+  }
+  return tokens;
+}
+
+function parseSide(s) {
+  const res = { xTerms: {}, yCoeff: 0, const: 0 };   // xTerms: exponent -> coefficient
+  for (const t of tokenizeSide(s)) {
+    const term = parseTerm(t);
+    if (!term) return { error: 'Cannot understand term: "' + t + '"' };
+    if (term.varName === 'x') {
+      if (term.exp > 12) return { error: 'Exponent too large: "' + t + '" (max 12)' };
+      res.xTerms[term.exp] = (res.xTerms[term.exp] || 0) + term.coeff;
+    } else if (term.varName === 'y') {
+      if (term.exp !== 1) return { error: 'Equation must be linear in y: "' + t + '"' };
+      res.yCoeff += term.coeff;
+    } else {
+      res.const += term.coeff;
+    }
+  }
+  return res;
+}
+
+// Solve "expr = expr" (or bare "expr", treated as y = expr) for y in terms of x.
+// Returns { poly, denom, display } or { error }.
+function solveEquation(raw) {
+  let s = String(raw).replace(/\s+/g, '').replace(/\u2212/g, '-');
+  if (!s) return { error: 'Enter a formula first.' };
+  if (/[()]/.test(s)) return { error: 'Parentheses are not supported yet.' };
+
+  let lhsStr, rhsStr;
+  const eq = s.indexOf('=');
+  if (eq === -1) { lhsStr = 'y'; rhsStr = s; }
+  else {
+    if (s.indexOf('=', eq + 1) !== -1) return { error: 'Only one "=" allowed.' };
+    lhsStr = s.slice(0, eq);
+    rhsStr = s.slice(eq + 1);
+  }
+  if (!lhsStr || !rhsStr) return { error: 'Both sides of "=" must have content.' };
+
+  const lhs = parseSide(lhsStr); if (lhs.error) return lhs;
+  const rhs = parseSide(rhsStr); if (rhs.error) return rhs;
+
+  // Move everything to the right:  yCoeff * y = sum(coeff_e * x^e)
+  let yC = lhs.yCoeff - rhs.yCoeff;
+  if (yC === 0) return { error: 'Equation has no effective y term — cannot solve for y.' };
+
+  const poly = {};
+  for (const e of new Set([...Object.keys(lhs.xTerms), ...Object.keys(rhs.xTerms)].map(Number))) {
+    const c = (rhs.xTerms[e] || 0) - (lhs.xTerms[e] || 0);
+    if (c !== 0) poly[e] = c;
+  }
+  const c0 = rhs.const - lhs.const;
+  if (c0 !== 0) poly[0] = (poly[0] || 0) + c0;
+
+  if (yC < 0) { for (const e of Object.keys(poly)) poly[e] = -poly[e]; yC = -yC; }
+
+  // Human-readable form
+  const exps = Object.keys(poly).map(Number).sort((a, b) => b - a);
+  const parts = [];
+  for (const e of exps) {
+    const c = poly[e], abs = Math.abs(c);
+    let s;
+    if (e === 0) s = fmt(abs);
+    else if (e === 1) s = (abs === 1 ? '' : fmt(abs)) + 'x';
+    else s = (abs === 1 ? '' : fmt(abs)) + 'x^' + e;
+    if (parts.length === 0) s = (c < 0 ? '\u2212' : '') + s;
+    else s = (c < 0 ? ' \u2212 ' : ' + ') + s;
+    parts.push(s);
+  }
+  const body = parts.length ? parts.join('') : '0';
+  const display = (yC === 1) ? ('y = ' + body) : ('y = (' + body + ') / ' + fmt(yC));
+
+  return { poly: poly, denom: yC, display: display };
+}
+
+function evalPoly(poly, x) {
+  let s = 0;
+  for (const e in poly) s += poly[e] * Math.pow(x, Number(e));
+  return s;
+}
+
+/* ================= drawing ================= */
+
+function draw(pts) {
+  const cv = document.getElementById('graph');
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+  const yMin = Math.min(...ys), yMax = Math.max(...ys);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+
+  // Auto-scale so the whole data range fits, origin pinned to the canvas centre
+  const halfX = niceCeil(Math.max(Math.abs(xMin), Math.abs(xMax), 1));
+  const halfY = niceCeil(Math.max(Math.abs(yMin), Math.abs(yMax), 1));
+  const pad = 64;
+  const unit = Math.min((W / 2 - pad) / halfX, (H / 2 - pad) / halfY);
+  const cx = W / 2, cy = H / 2;
+  const X = v => cx + v * unit;
+  const Y = v => cy - v * unit;
+
+  const stepX = niceCeil(55 / unit), stepY = niceCeil(55 / unit);
+  const visX = Math.ceil((W / 2) / unit), visY = Math.ceil((H / 2) / unit);
+  ctx.font = '12px ui-monospace, Menlo, Consolas, monospace';
+
+  // Grid
+  ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1;
+  for (let g = -visX; g <= visX; g += stepX) {
+    const px = X(g); if (px < 0 || px > W) continue;
+    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, H); ctx.stroke();
+  }
+  for (let g = -visY; g <= visY; g += stepY) {
+    const py = Y(g); if (py < 0 || py > H) continue;
+    ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(W, py); ctx.stroke();
+  }
+
+  // Axes through (0,0)
+  ctx.strokeStyle = '#0f172a'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(W - 8, cy); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx, H); ctx.lineTo(cx, 8); ctx.stroke();
+  ctx.fillStyle = '#0f172a';
+  ctx.beginPath(); ctx.moveTo(W - 14, cy - 5); ctx.lineTo(W - 8, cy); ctx.lineTo(W - 14, cy + 5); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(cx - 5, 14); ctx.lineTo(cx, 8); ctx.lineTo(cx + 5, 14); ctx.closePath(); ctx.fill();
+
+  // Tick labels
+  ctx.fillStyle = '#64748b';
+  for (let g = -visX; g <= visX; g += stepX) { if (g === 0) continue; ctx.fillText(fmt(g), X(g) + 3, cy + 16); }
+  for (let g = -visY; g <= visY; g += stepY) { if (g === 0) continue; ctx.fillText(fmt(g), cx + 6, Y(g) - 4); }
+  ctx.fillStyle = '#0f172a';
+  ctx.fillText('x', W - 20, cy - 10);
+  ctx.fillText('y', cx + 12, 18);
+
+  // Line through the points
+  ctx.strokeStyle = '#2563eb'; ctx.lineWidth = 2.5;
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (let i = 0; i < pts.length; i++) {
+    const px = X(pts[i].x), py = Y(pts[i].y);
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+
+  // Point markers — only when the unit spacing is wide enough that they
+  // don't merge into a solid ribbon (x = 1..100 on a 900px canvas is ~2.5px
+  // per unit, so dots are skipped and the polyline alone carries the plot).
+  if (unit >= 6) {
+    ctx.fillStyle = '#dc2626';
+    for (const p of pts) {
+      const px = X(p.x), py = Y(p.y);
+      if (px < 0 || px > W || py < 0 || py > H) continue;
+      ctx.beginPath(); ctx.arc(px, py, 2.5, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+}
+
+/* ================= UI ================= */
+
+function renderTable(pts) {
+  document.getElementById('points').innerHTML =
+    pts.map(p => '<tr><td>' + p.x + '</td><td>' + fmt(p.y) + '</td></tr>').join('');
+}
+
+function showError(msg) {
+  const el = document.getElementById('error');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+function clearError() {
+  document.getElementById('error').style.display = 'none';
+}
+
+function plot(raw) {
+  const sol = solveEquation(raw);
+  if (sol.error) {
+    showError(sol.error);
+    document.getElementById('solved').textContent = '';
+    return;
+  }
+  const pts = [];
+  for (let x = 1; x <= 100; x++) {
+    const y = evalPoly(sol.poly, x) / sol.denom;
+    if (!isFinite(y)) { showError('Result overflows at x = ' + x + ' — exponents too large?'); return; }
+    pts.push({ x: x, y: y });
+  }
+  clearError();
+  document.getElementById('solved').textContent =
+    'Given:  ' + raw.trim() + '    \u2192    ' + sol.display + '    (plotted for x = 1 \u2026 100)';
+  draw(pts);
+  renderTable(pts);
+}
+
+function init() {
+  const form = document.getElementById('form');
+  const input = document.getElementById('formula');
+  form.addEventListener('submit', function (e) { e.preventDefault(); plot(input.value); });
+  document.querySelectorAll('.chip').forEach(function (ch) {
+    ch.addEventListener('click', function () { input.value = ch.textContent; plot(input.value); });
+  });
+  plot(input.value);
+}
+
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('DOMContentLoaded', init);
+}
+</script>
+</body>
+</html>

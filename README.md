@@ -29,7 +29,7 @@ Open http://127.0.0.1:8123
 | Endpoint | Description |
 |---|---|
 | `GET /` | Renders the graph page. The formula is a query param: `/?formula=x%20%2B%20y%20%3D%203`. The page keeps the URL in sync (`?formula=…`) as you plot, so links are shareable. |
-| `GET /api/points?formula=…&x_min=…&x_max=…` | Solves the formula and returns the branches as JSON: `{"formula", "display", "kind", "x_range": {"min","max"}, "branches": [{"label","points": [{"x","y"}, …]}, …]}`. Linear formulas return one branch, quadratic-in-`y` two ("+", "−"). Invalid formulas (or no real points) return `400` with a human-readable `detail`. |
+| `GET /api/points?formula=…&x_min=…&x_max=…&x_step=…` | Solves the formula and returns the branches as JSON: `{"formula", "display", "kind", "x_range": {"min","max"}, "step", "branches": [{"label","points": [{"x","y"}, …]}, …]}`. Linear formulas return one branch, quadratic-in-`y` two ("+", "−"). `x_min`/`x_max`/`x_step` (1–1000, both range bounds required together) override the default range and sampling. Invalid formulas (or no real points) return `400` with a human-readable `detail`. |
 | `GET /health` | Liveness probe: `{"status": "ok", "app": "xy-graph-gen"}` |
 
 ## Supported input
@@ -105,9 +105,9 @@ Tick items off as they land. P1 = planned next, P2 = valuable upgrades,
 P3 = bigger / probably not worth it.
 
 ### P1 — planned next
-- [ ] x-range + step controls in the UI (`x_min` / `x_max` / step inputs; today they only work via URL/API)
-- [ ] Export graph as PNG + "Copy link" button (`canvas.toDataURL()` + existing `?formula=` share)
-- [ ] GitHub Actions CI (pytest + node tests on push)
+- [x] x-range + step controls in the UI (`x_min` / `x_max` / step inputs; today they only work via URL/API)
+- [x] Export graph as PNG + "Copy link" button (`canvas.toDataURL()` + existing `?formula=` share)
+- [x] GitHub Actions CI (pytest + node tests on push)
 
 ### P2 — capability upgrades
 - [ ] General functions: `sin`, `cos`, `tan`, `log`, `sqrt`, `exp`, `abs` (real grapher territory)

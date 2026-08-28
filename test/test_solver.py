@@ -179,6 +179,45 @@ def test_custom_range_linear():
     assert [y for _, y in result["branches"][0]["points"]] == [2.0, 4.0, 6.0, 8.0, 10.0]
 
 
+def test_explicit_step_linear():
+    result = solver.generate_points("y = 2x", x_min=1, x_max=10, x_step=2)
+    assert result["step"] == 2
+    assert [x for x, _ in result["branches"][0]["points"]] == [1, 3, 5, 7, 9]
+
+
+def test_explicit_step_quadratic():
+    result = solver.generate_points("x^2 + y^2 = 100", x_min=-10, x_max=10, x_step=5)
+    assert result["step"] == 5
+    plus = result["branches"][0]["points"]
+    assert [x for x, _ in plus] == [-10, -5, 0, 5, 10]
+    assert {x: y for x, y in plus}[0] == 10.0
+
+
+def test_step_with_auto_range():
+    result = solver.generate_points("x^2 + y^2 = 100", x_step=2)
+    assert result["step"] == 2
+    assert result["x_range"] == (-10, 10)
+    assert [x for x, _ in result["branches"][0]["points"]] == [-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10]
+
+
+@pytest.mark.parametrize("step", [0, -3, 1001])
+def test_step_out_of_bounds(step):
+    with pytest.raises(solver.SolverError, match="x_step must be between 1 and 1000"):
+        solver.generate_points("y = x", x_min=1, x_max=10, x_step=step)
+
+
+def test_partial_range_rejected():
+    with pytest.raises(solver.SolverError, match="both x_min and x_max"):
+        solver.generate_points("y = x", x_min=1)
+    with pytest.raises(solver.SolverError, match="both x_min and x_max"):
+        solver.generate_points("y = x", x_max=10)
+
+
+def test_range_too_large_rejected():
+    with pytest.raises(solver.SolverError, match="Range too large"):
+        solver.generate_points("y = x", x_min=1, x_max=1_000_000)
+
+
 def test_bad_range():
     with pytest.raises(solver.SolverError, match="x_min must be <= x_max"):
         solver.generate_points("y = x", x_min=10, x_max=5)

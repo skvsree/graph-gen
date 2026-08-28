@@ -26,6 +26,7 @@ AUTO_RANGE_LIMIT = 400      # max points per branch for auto-derived ranges
 AUTO_SCAN_CAP = 10_000      # beyond this a domain tail is treated as unbounded
 UNBOUNDED_WINDOW = 200      # span for one-sided unbounded domains
 UNBOUNDED_FALLBACK = 100    # symmetric default for fully unbounded domains
+MAX_POINTS_PER_BRANCH = 5000  # explicit ranges are capped at this many points
 
 
 class SolverError(ValueError):
@@ -271,7 +272,7 @@ def auto_range(sol: dict) -> tuple[int, int]:
 
 
 def generate_points(
-    raw: str, x_min: int | None = None, x_max: int | None = None
+    raw: str, x_min: int | None = None, x_max: int | None = None, x_step: int | None = None
 ) -> dict:
     """Solve ``raw`` and build branch points.
 
@@ -282,18 +283,32 @@ def generate_points(
     ``x_min``/``x_max`` override the range; when omitted, linear formulas use
     x = 1..100 and quadratic formulas derive a range from the real domain
     (see :func:`auto_range`), capped at AUTO_RANGE_LIMIT points per branch.
+    ``x_step`` (>= 1, default 1) controls the sampling; explicit ranges are
+    capped at MAX_POINTS_PER_BRANCH points.
     """
     sol = solve_equation(raw)
-    if x_min is None or x_max is None:
+    if (x_min is None) != (x_max is None):
+        raise SolverError("Provide both x_min and x_max, or neither.")
+    if x_min is None:
         lo, hi = auto_range(sol)
     else:
+        assert x_max is not None  # guaranteed by the both-or-neither check
         if x_min > x_max:
             raise SolverError("x_min must be <= x_max.")
         lo, hi = x_min, x_max
 
-    step = 1
-    if sol["kind"] == "quadratic" and (x_min is None or x_max is None) and hi - lo > AUTO_RANGE_LIMIT:
-        step = math.ceil((hi - lo) / AUTO_RANGE_LIMIT)
+    if x_step is not None:
+        if x_step < 1 or x_step > 1000:
+            raise SolverError("x_step must be between 1 and 1000.")
+        step = x_step
+    else:
+        step = 1
+        if sol["kind"] == "quadratic" and (x_min is None or x_max is None) and hi - lo > AUTO_RANGE_LIMIT:
+            step = math.ceil((hi - lo) / AUTO_RANGE_LIMIT)
+    if (hi - lo) // step + 1 > MAX_POINTS_PER_BRANCH:
+        raise SolverError(
+            f"Range too large (max {MAX_POINTS_PER_BRANCH} points) — increase the step."
+        )
 
     branches = []
     if sol["kind"] == "linear":
@@ -328,4 +343,4 @@ def generate_points(
             {"label": "\u2212", "points": minus},
         ]
 
-    return {"solution": sol, "x_range": (lo, hi), "branches": branches}
+    return {"solution": sol, "x_range": (lo, hi), "step": step, "branches": branches}

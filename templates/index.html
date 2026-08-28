@@ -28,6 +28,19 @@
     background: #2563eb; color: #fff; border: none; border-radius: 8px; cursor: pointer;
   }
   .form button:hover { background: #1d4ed8; }
+  .form input[type=number] {
+    width: 88px; padding: 8px 10px; font-size: 14px;
+    border: 1px solid #cbd5e1; border-radius: 8px;
+    font-family: ui-monospace, Consolas, monospace;
+  }
+  .form input[type=number]:focus { outline: 2px solid #bfdbfe; border-color: #2563eb; }
+  .range-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .range-label { color: #64748b; font-size: 13px; }
+  .btn-secondary {
+    padding: 10px 14px; font-size: 14px; font-weight: 600;
+    background: #fff; color: #334155; border: 1px solid #cbd5e1; border-radius: 8px; cursor: pointer;
+  }
+  .btn-secondary:hover { background: #f1f5f9; border-color: #94a3b8; }
   .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
   .chip {
     font-family: ui-monospace, Consolas, monospace; font-size: 13px;
@@ -65,7 +78,17 @@
 
   <form class="form" id="form">
     <input type="text" id="formula" value="{{ formula }}" spellcheck="false" autocomplete="off" placeholder="e.g. x + y = 3">
+    <div class="range-row" id="rangeRow">
+      <span class="range-label">x:</span>
+      <input type="number" id="xMin" value="{{ x_min }}" placeholder="auto" min="-100000" max="100000" step="1" title="x from (blank = auto)">
+      <span class="range-label">to</span>
+      <input type="number" id="xMax" value="{{ x_max }}" placeholder="auto" min="-100000" max="100000" step="1" title="x to (blank = auto)">
+      <span class="range-label">step</span>
+      <input type="number" id="xStep" value="{{ x_step }}" placeholder="auto" min="1" max="1000" step="1" title="x step (blank = 1)">
+    </div>
     <button type="submit">Plot</button>
+    <button type="button" class="btn-secondary" id="pngBtn" title="Download the graph as PNG">Download PNG</button>
+    <button type="button" class="btn-secondary" id="copyBtn" title="Copy a shareable link to this graph">Copy link</button>
   </form>
 
   <div class="chips" id="chips">
@@ -292,17 +315,28 @@ function autoRange(sol) {
   return { min: left, max: right };
 }
 
-// Build branch points for a solution. Returns { xRange, branches } or { error }.
-function buildBranches(sol, xMin, xMax) {
+// Build branch points for a solution. Returns { xRange, step, branches } or { error }.
+function buildBranches(sol, xMin, xMax, xStep) {
+  if ((xMin === undefined) !== (xMax === undefined)) {
+    return { error: 'Provide both x_min and x_max, or neither.' };
+  }
   let lo = xMin, hi = xMax;
   if (lo === undefined || hi === undefined) {
     const r = autoRange(sol);
     lo = r.min; hi = r.max;
   }
-  let step = 1;
-  const span = hi - lo;
-  if (sol.kind === 'quadratic' && (xMin === undefined || xMax === undefined) && span > 400) {
-    step = Math.ceil(span / 400);
+  let step;
+  if (xStep !== undefined) {
+    if (xStep < 1 || xStep > 1000) return { error: 'x_step must be between 1 and 1000.' };
+    step = xStep;
+  } else {
+    step = 1;
+    if (sol.kind === 'quadratic' && (xMin === undefined || xMax === undefined) && (hi - lo) > 400) {
+      step = Math.ceil((hi - lo) / 400);
+    }
+  }
+  if (Math.floor((hi - lo) / step) + 1 > 5000) {
+    return { error: 'Range too large (max 5000 points) — increase the step.' };
   }
   if (sol.kind === 'linear') {
     const pts = [];
@@ -311,7 +345,7 @@ function buildBranches(sol, xMin, xMax) {
       if (!isFinite(y)) return { error: 'Result overflows at x = ' + x + ' — exponents too large?' };
       pts.push({ x: x, y: y });
     }
-    return { xRange: { min: lo, max: hi }, branches: [{ label: '', points: pts }] };
+    return { xRange: { min: lo, max: hi }, step: step, branches: [{ label: '', points: pts }] };
   }
   const plus = [], minus = [];
   for (let x = lo; x <= hi; x += step) {
@@ -328,6 +362,7 @@ function buildBranches(sol, xMin, xMax) {
   if (!plus.length && !minus.length) return { error: 'No real y for the given x range.' };
   return {
     xRange: { min: lo, max: hi },
+    step: step,
     branches: [{ label: '+', points: plus }, { label: '\u2212', points: minus }],
   };
 }
@@ -446,17 +481,64 @@ function clearError() {
 // Guards against out-of-order responses when the user plots quickly.
 let plotSeq = 0;
 
+function exportPng() {
+  const cv = document.getElementById('graph');
+  const a = document.createElement('a');
+  a.href = cv.toDataURL('image/png');
+  a.download = 'xy-graph.png';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+function copyLink() {
+  const url = location.href;
+  const flash = () => {
+    const btn = document.getElementById('copyBtn');
+    const old = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = old; }, 1500);
+  };
+  const fallback = () => {
+    const ta = document.createElement('textarea');
+    ta.value = url;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    ta.remove();
+    flash();
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(url).then(flash, fallback);
+  } else {
+    fallback();
+  }
+}
+
+// Collect the current formula + range inputs into a query string.
+function rangeParams(raw) {
+  const v = id => document.getElementById(id).value.trim();
+  const p = new URLSearchParams();
+  p.set('formula', raw);
+  const xMin = v('xMin'), xMax = v('xMax'), xStep = v('xStep');
+  if (xMin !== '') p.set('x_min', xMin);
+  if (xMax !== '') p.set('x_max', xMax);
+  if (xStep !== '') p.set('x_step', xStep);
+  return p;
+}
+
 async function plot(raw) {
   const seq = ++plotSeq;
   let data = null, errMsg = null;
+  const qp = rangeParams(raw);
   // Keep the query string in sync with the input immediately on click, so the
   // URL always reproduces what was typed (works even when the plot errors).
-  try { history.replaceState(null, '', '?formula=' + encodeURIComponent(raw)); } catch (e) {}
+  try { history.replaceState(null, '', '?' + qp.toString()); } catch (e) {}
 
   // Prefer the server-side solver; fall back to the built-in one if the API
   // is unreachable (e.g. page opened from file:// or server down).
   try {
-    const res = await fetch('/api/points?formula=' + encodeURIComponent(raw));
+    const res = await fetch('/api/points?' + qp.toString());
     const body = await res.json();
     if (!res.ok) errMsg = (body && body.detail) ? body.detail : ('Server error (' + res.status + ')');
     else data = body;
@@ -467,9 +549,13 @@ async function plot(raw) {
   if (!data && !errMsg) {
     const sol = solveEquation(raw);
     if (sol.error) { showError(sol.error); document.getElementById('solved').textContent = ''; return; }
-    const built = buildBranches(sol);
+    const rv = id => {
+      const t = document.getElementById(id).value.trim();
+      return t === '' ? undefined : parseInt(t, 10);
+    };
+    const built = buildBranches(sol, rv('xMin'), rv('xMax'), rv('xStep'));
     if (built.error) { showError(built.error); document.getElementById('solved').textContent = ''; return; }
-    data = { display: sol.display, kind: sol.kind, x_range: built.xRange, branches: built.branches };
+    data = { display: sol.display, kind: sol.kind, x_range: built.xRange, step: built.step, branches: built.branches };
   }
 
   if (seq !== plotSeq) return;   // a newer plot superseded this one
@@ -477,10 +563,11 @@ async function plot(raw) {
 
   clearError();
   const rng = data.x_range;
+  const stepNote = (data.step && data.step !== 1) ? (' \u00b7 step ' + data.step) : '';
   const branchNote = data.branches.length > 1 ? (' \u00b7 ' + data.branches.length + ' branches') : '';
   document.getElementById('solved').textContent =
     'Given:  ' + raw.trim() + '    \u2192    ' + data.display +
-    '    (plotted for x = ' + rng.min + ' \u2026 ' + rng.max + branchNote + ')';
+    '    (plotted for x = ' + rng.min + ' \u2026 ' + rng.max + stepNote + branchNote + ')';
   draw(data.branches);
   renderTable(data.branches);
 }
@@ -489,6 +576,8 @@ function init() {
   const form = document.getElementById('form');
   const input = document.getElementById('formula');
   form.addEventListener('submit', function (e) { e.preventDefault(); plot(input.value); });
+  document.getElementById('pngBtn').addEventListener('click', exportPng);
+  document.getElementById('copyBtn').addEventListener('click', copyLink);
   document.querySelectorAll('.chip').forEach(function (ch) {
     ch.addEventListener('click', function () { input.value = ch.textContent; plot(input.value); });
   });

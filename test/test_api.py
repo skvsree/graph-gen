@@ -20,6 +20,14 @@ def test_index_renders_formula_from_query_param():
     assert 'value="2x + 3y = 6"' in r.text
 
 
+def test_index_renders_range_from_query_params():
+    r = client.get("/", params={"formula": "y = x", "x_min": "-5", "x_max": "5", "x_step": "2"})
+    assert r.status_code == 200
+    assert 'id="xMin" value="-5"' in r.text
+    assert 'id="xMax" value="5"' in r.text
+    assert 'id="xStep" value="2"' in r.text
+
+
 def test_index_escapes_formula_against_xss():
     r = client.get("/", params={"formula": "<script>alert(1)</script>"})
     assert r.status_code == 200
@@ -46,7 +54,34 @@ def test_api_points_linear_custom_range():
     assert r.status_code == 200
     body = r.json()
     assert body["x_range"] == {"min": 1, "max": 5}
+    assert body["step"] == 1
     assert [p["y"] for p in body["branches"][0]["points"]] == [2, 4, 6, 8, 10]
+
+
+def test_api_points_explicit_step():
+    r = client.get("/api/points", params={"formula": "y = 2x", "x_min": 1, "x_max": 10, "x_step": 2})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["step"] == 2
+    assert [p["x"] for p in body["branches"][0]["points"]] == [1, 3, 5, 7, 9]
+
+
+def test_api_points_invalid_step_returns_400():
+    r = client.get("/api/points", params={"formula": "y = x", "x_min": 1, "x_max": 5, "x_step": 0})
+    assert r.status_code == 400
+    assert "x_step" in r.json()["detail"]
+
+
+def test_api_points_partial_range_returns_400():
+    r = client.get("/api/points", params={"formula": "y = x", "x_min": 1})
+    assert r.status_code == 400
+    assert "both x_min and x_max" in r.json()["detail"]
+
+
+def test_api_points_range_too_large_returns_400():
+    r = client.get("/api/points", params={"formula": "y = x", "x_min": 1, "x_max": 1_000_000})
+    assert r.status_code == 400
+    assert "Range too large" in r.json()["detail"]
 
 
 def test_api_points_circle():

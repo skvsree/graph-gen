@@ -70,6 +70,19 @@ checkErr('empty lhs', '= 3', 'Both sides');
 checkErr('garbage term', 'y = @#$', 'Cannot understand');
 checkErr('empty input', '   ', 'Enter a formula');
 
+// --- x_step / explicit ranges (buildBranches) ---
+{
+  const sol = solveEquation('y = 2x');
+  const b = buildBranches(sol, 1, 10, 2);
+  check('step=2 x values', b.branches[0].points.map(p => p.x), [1, 3, 5, 7, 9]);
+  check('step reported', b.step, 2);
+  const c = buildBranches(sol, 1, 10);
+  check('default step=1', c.step, 1);
+}
+check('partial range error', (() => { const b = buildBranches(solveEquation('y = x'), 1); return b.error || ''; })(), 'Provide both x_min and x_max, or neither.');
+check('step 0 error', (() => { const b = buildBranches(solveEquation('y = x'), 1, 10, 0); return b.error || ''; })(), 'x_step must be between 1 and 1000.');
+check('range too large error', (() => { const b = buildBranches(solveEquation('y = x'), 1, 1000000); return b.error || ''; })(), 'Range too large (max 5000 points) — increase the step.');
+
 // --- quadratic in y: circles and friends ---
 {
   const sol = solveEquation('x^2 + y^2 = 100');

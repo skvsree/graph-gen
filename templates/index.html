@@ -447,7 +447,9 @@ let plotSeq = 0;
 
 async function plot(raw) {
   const seq = ++plotSeq;
-  let data = null, errMsg = null;
+  // Keep the query string in sync with the input immediately on click, so the
+  // URL always reproduces what was typed (works even when the plot errors).
+  try { history.replaceState(null, '', '?formula=' + encodeURIComponent(raw)); } catch (e) {}
 
   // Prefer the server-side solver; fall back to the built-in one if the API
   // is unreachable (e.g. page opened from file:// or server down).
@@ -479,7 +481,6 @@ async function plot(raw) {
     '    (plotted for x = ' + rng.min + ' \u2026 ' + rng.max + branchNote + ')';
   draw(data.branches);
   renderTable(data.branches);
-  try { history.replaceState(null, '', '?formula=' + encodeURIComponent(raw)); } catch (e) {}
 }
 
 function init() {

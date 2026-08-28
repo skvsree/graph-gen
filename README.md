@@ -67,3 +67,23 @@ node test/solver.test.js     # client-side fallback solver
 
 The Python solver and the client-side JS solver mirror each other; keep them
 in agreement when changing either.
+
+## Production (this host)
+
+Runs as a systemd service behind Caddy (TLS via Let's Encrypt):
+
+- **Service:** `xy-graph-gen.service` → uvicorn on `127.0.0.1:8123`
+  - `systemctl restart xy-graph-gen`, logs: `journalctl -u xy-graph-gen -f`
+- **Site:** `xy.selviz.in` → `reverse_proxy 127.0.0.1:8123` in `/etc/caddy/Caddyfile`
+  - `systemctl reload caddy` after editing the Caddyfile
+- **DNS:** `xy.selviz.in` → this host (72.61.255.195)
+
+Deploy a change:
+
+```bash
+cd /opt/xy-graph-gen
+git pull
+.venv/bin/pip install -e '.[dev]'   # only if pyproject.toml changed
+.venv/bin/pytest -q
+systemctl restart xy-graph-gen
+```

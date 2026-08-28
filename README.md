@@ -98,3 +98,29 @@ git pull
 .venv/bin/pytest -q
 systemctl restart xy-graph-gen
 ```
+
+## TODO / Roadmap
+
+Tick items off as they land. P1 = planned next, P2 = valuable upgrades,
+P3 = bigger / probably not worth it.
+
+### P1 — planned next
+- [ ] x-range + step controls in the UI (`x_min` / `x_max` / step inputs; today they only work via URL/API)
+- [ ] Export graph as PNG + "Copy link" button (`canvas.toDataURL()` + existing `?formula=` share)
+- [ ] GitHub Actions CI (pytest + node tests on push)
+
+### P2 — capability upgrades
+- [ ] General functions: `sin`, `cos`, `tan`, `log`, `sqrt`, `exp`, `abs` (real grapher territory)
+- [ ] Multiple formulas on one graph with legend (batch `/api/points` or comma-separated input)
+- [ ] Derivative + tangent lines (symbolic for polynomials — cheap: differentiate the coefficient map)
+- [ ] Intersection points between curves (solve linear/quadratic pairs symbolically)
+- [ ] Zoom & pan on the canvas (drag to pan, wheel to zoom)
+- [ ] Formula history (localStorage ring buffer, shown as chips)
+- [ ] Points CSV export
+- [ ] Dark mode / grid toggle
+
+### P3 — bigger / probably not
+- [ ] General implicit curves (grid sampling / contour rendering — different plotter)
+- [ ] Inequality shading (`y > 2x + 1`)
+- [ ] Docker packaging (already on systemd + Caddy)
+- [ ] Caching / observability (premature for a single-user service)

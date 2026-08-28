@@ -1,0 +1,23 @@
+[project]
+name = "xy-graph-gen"
+version = "0.2.0"
+description = "Formula grapher: FastAPI service that solves an equation for y and plots x = 1..100"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "jinja2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "httpx",
+]
+
+[tool.setuptools]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["test"]

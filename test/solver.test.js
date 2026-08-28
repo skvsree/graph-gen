@@ -5,7 +5,7 @@ const fs = require('fs');
 const vm = require('vm');
 const path = require('path');
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '..', 'templates', 'index.html'), 'utf8');
 const m = html.match(/<script>([\s\S]*?)<\/script>/);
 if (!m) { console.error('FAIL: no <script> found in index.html'); process.exit(1); }
 

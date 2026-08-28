@@ -62,7 +62,7 @@
   </header>
 
   <form class="form" id="form">
-    <input type="text" id="formula" value="x + y = 3" spellcheck="false" autocomplete="off" placeholder="e.g. x + y = 3">
+    <input type="text" id="formula" value="{{ formula }}" spellcheck="false" autocomplete="off" placeholder="e.g. x + y = 3">
     <button type="submit">Plot</button>
   </form>
 
@@ -95,7 +95,7 @@
 <script>
 'use strict';
 
-/* ================= parsing & solving ================= */
+/* ================= parsing & solving (offline fallback) ================= */
 
 function fmt(n) {
   if (Object.is(n, -0)) n = 0;
@@ -314,24 +314,45 @@ function clearError() {
   document.getElementById('error').style.display = 'none';
 }
 
-function plot(raw) {
-  const sol = solveEquation(raw);
-  if (sol.error) {
-    showError(sol.error);
-    document.getElementById('solved').textContent = '';
-    return;
+// Guards against out-of-order responses when the user plots quickly.
+let plotSeq = 0;
+
+async function plot(raw) {
+  const seq = ++plotSeq;
+  let data = null, errMsg = null;
+
+  // Prefer the server-side solver; fall back to the built-in one if the API
+  // is unreachable (e.g. page opened from file:// or server down).
+  try {
+    const res = await fetch('/api/points?formula=' + encodeURIComponent(raw));
+    const body = await res.json();
+    if (!res.ok) errMsg = (body && body.detail) ? body.detail : ('Server error (' + res.status + ')');
+    else data = body;
+  } catch (e) {
+    data = null;
   }
-  const pts = [];
-  for (let x = 1; x <= 100; x++) {
-    const y = evalPoly(sol.poly, x) / sol.denom;
-    if (!isFinite(y)) { showError('Result overflows at x = ' + x + ' — exponents too large?'); return; }
-    pts.push({ x: x, y: y });
+
+  if (!data && !errMsg) {
+    const local = solveEquation(raw);
+    if (local.error) { showError(local.error); document.getElementById('solved').textContent = ''; return; }
+    const pts = [];
+    for (let x = 1; x <= 100; x++) {
+      const y = evalPoly(local.poly, x) / local.denom;
+      if (!isFinite(y)) { showError('Result overflows at x = ' + x + ' — exponents too large?'); return; }
+      pts.push({ x: x, y: y });
+    }
+    data = { display: local.display, points: pts };
   }
+
+  if (seq !== plotSeq) return;   // a newer plot superseded this one
+  if (errMsg) { showError(errMsg); document.getElementById('solved').textContent = ''; return; }
+
   clearError();
   document.getElementById('solved').textContent =
-    'Given:  ' + raw.trim() + '    \u2192    ' + sol.display + '    (plotted for x = 1 \u2026 100)';
-  draw(pts);
-  renderTable(pts);
+    'Given:  ' + raw.trim() + '    \u2192    ' + data.display + '    (plotted for x = 1 \u2026 100)';
+  draw(data.points);
+  renderTable(data.points);
+  try { history.replaceState(null, '', '?formula=' + encodeURIComponent(raw)); } catch (e) {}
 }
 
 function init() {

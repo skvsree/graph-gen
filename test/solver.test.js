@@ -13,9 +13,9 @@ const sandbox = { console, Math, Number, String, Object, Set, isFinite, parseInt
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 // The guard `typeof document !== 'undefined'` prevents DOM code from running here.
-vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm };', sandbox);
+vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches };', sandbox);
 
-const { solveEquation, evalPoly, fmt } = sandbox.__api;
+const { solveEquation, evalPoly, fmt, parseTerm, buildBranches } = sandbox.__api;
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -31,10 +31,10 @@ function checkErr(name, raw, needle) {
 }
 
 // --- regression: bare x / y terms must get implicit coefficient 1
-check('parseTerm("x")', sandbox.__api.parseTerm('x'), { coeff: 1, varName: 'x', exp: 1 });
-check('parseTerm("-y")', sandbox.__api.parseTerm('-y'), { coeff: -1, varName: 'y', exp: 1 });
-check('parseTerm("2x")', sandbox.__api.parseTerm('2x'), { coeff: 2, varName: 'x', exp: 1 });
-check('parseTerm("x^3")', sandbox.__api.parseTerm('x^3'), { coeff: 1, varName: 'x', exp: 3 });
+check('parseTerm("x")', parseTerm('x'), { coeff: 1, varName: 'x', exp: 1 });
+check('parseTerm("-y")', parseTerm('-y'), { coeff: -1, varName: 'y', exp: 1 });
+check('parseTerm("2x")', parseTerm('2x'), { coeff: 2, varName: 'x', exp: 1 });
+check('parseTerm("x^3")', parseTerm('x^3'), { coeff: 1, varName: 'x', exp: 3 });
 
 // --- user's example: x + y = 3  =>  y = 3 - x
 {
@@ -64,11 +64,40 @@ check('fractional coeff', solveEquation('0.5x + y = 2').display, 'y = \u22120.5x
 checkErr('no y term', 'x = 5', 'no effective y term');
 checkErr('two equals signs', 'x + y = 3 = 4', 'Only one "="');
 checkErr('parentheses', 'y = (x)', 'Parentheses');
-checkErr('y squared', 'y^2 = x', 'linear in y');
+checkErr('y cubed', 'y^3 = x', 'linear or quadratic in y');
 checkErr('empty rhs', 'x = ', 'Both sides');
 checkErr('empty lhs', '= 3', 'Both sides');
 checkErr('garbage term', 'y = @#$', 'Cannot understand');
 checkErr('empty input', '   ', 'Enter a formula');
+
+// --- quadratic in y: circles and friends ---
+{
+  const sol = solveEquation('x^2 + y^2 = 100');
+  check('circle solves', sol.kind, 'quadratic');
+  check('circle a,b', [sol.a, sol.b], [1, 0]);
+  check('circle poly', sol.poly, { 0: 100, 2: -1 });
+  check('circle display', sol.display, 'y = \u00b1\u221a(\u2212x^2 + 100)');
+  const b = buildBranches(sol);
+  check('circle x range', b.xRange, { min: -10, max: 10 });
+  check('circle branches', b.branches.length, 2);
+  check('circle plus[0] y=10', b.branches[0].points[10].y, 10);
+  check('circle minus[0] y=-10', b.branches[1].points[10].y, -10);
+  check('circle 21 pts per branch', [b.branches[0].points.length, b.branches[1].points.length], [21, 21]);
+}
+check('y^2=4x display', solveEquation('y^2 = 4x').display, 'y = \u00b1\u221a(4x)');
+check('2y^2=x^2+8 display', solveEquation('2y^2 = x^2 + 8').display, 'y = \u00b1\u221a((x^2 + 8) / 2)');
+check('y^2-x^2=1 display', solveEquation('y^2 - x^2 = 1').display, 'y = \u00b1\u221a(x^2 + 1)');
+check('y^2+y=x display', solveEquation('y^2 + y = x').display, 'y = (\u22121 \u00b1 \u221a(1 + 4x)) / 2');
+{
+  const b = buildBranches(solveEquation('y^2 + y = x'));
+  check('y^2+y=x plus(0)=0', b.branches[0].points[0].y, 0);
+  check('y^2+y=x minus(0)=-1', b.branches[1].points[0].y, -1);
+}
+checkErr('empty input', '   ', 'Enter a formula');
+{
+  const b = buildBranches(solveEquation('y^2 = -1'));
+  check('y^2=-1 no real y', b.error || '', 'No real y for the given x range.');
+}
 
 console.log(failures === 0 ? '\nALL TESTS PASSED' : '\n' + failures + ' TEST(S) FAILED');
 process.exit(failures === 0 ? 0 : 1);

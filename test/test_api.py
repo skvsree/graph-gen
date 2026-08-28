@@ -27,26 +27,62 @@ def test_index_escapes_formula_against_xss():
     assert "&lt;script&gt;" in r.text
 
 
-def test_api_points_default():
+def test_api_points_default_linear():
     r = client.get("/api/points")
     assert r.status_code == 200
     body = r.json()
     assert body["display"] == "y = \u2212x + 3"
-    assert len(body["points"]) == 100
-    assert body["points"][0] == {"x": 1, "y": 2}
-    assert body["points"][99] == {"x": 100, "y": -97}
+    assert body["kind"] == "linear"
+    assert body["x_range"] == {"min": 1, "max": 100}
+    assert len(body["branches"]) == 1
+    pts = body["branches"][0]["points"]
+    assert len(pts) == 100
+    assert pts[0] == {"x": 1, "y": 2}
+    assert pts[99] == {"x": 100, "y": -97}
 
 
-def test_api_points_custom_range():
+def test_api_points_linear_custom_range():
     r = client.get("/api/points", params={"formula": "y = 2x", "x_min": 1, "x_max": 5})
     assert r.status_code == 200
-    assert [p["y"] for p in r.json()["points"]] == [2, 4, 6, 8, 10]
+    body = r.json()
+    assert body["x_range"] == {"min": 1, "max": 5}
+    assert [p["y"] for p in body["branches"][0]["points"]] == [2, 4, 6, 8, 10]
+
+
+def test_api_points_circle():
+    r = client.get("/api/points", params={"formula": "x^2 + y^2 = 100"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["kind"] == "quadratic"
+    assert body["display"] == "y = \u00b1\u221a(\u2212x^2 + 100)"
+    assert body["x_range"] == {"min": -10, "max": 10}
+    assert len(body["branches"]) == 2
+    plus = body["branches"][0]
+    minus = body["branches"][1]
+    assert plus["label"] == "+"
+    assert minus["label"] == "\u2212"
+    assert plus["points"][10] == {"x": 0, "y": 10}
+    assert minus["points"][10] == {"x": 0, "y": -10}
+
+
+def test_api_points_circle_explicit_range():
+    r = client.get("/api/points", params={"formula": "x^2 + y^2 = 100", "x_min": 1, "x_max": 10})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["x_range"] == {"min": 1, "max": 10}
+    assert len(body["branches"][0]["points"]) == 10
 
 
 def test_api_points_invalid_formula_returns_400():
     r = client.get("/api/points", params={"formula": "x = 5"})
     assert r.status_code == 400
     assert "no effective y term" in r.json()["detail"]
+
+
+def test_api_points_no_real_points_returns_400():
+    r = client.get("/api/points", params={"formula": "y^2 = -1"})
+    assert r.status_code == 400
+    assert "No real y" in r.json()["detail"]
 
 
 def test_api_points_bad_range_returns_400():

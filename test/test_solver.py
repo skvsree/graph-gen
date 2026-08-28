@@ -3,6 +3,8 @@
 Mirrors test/solver.test.js — the two must stay in agreement.
 """
 
+import math
+
 import pytest
 
 from app import solver
@@ -32,6 +34,7 @@ def test_parse_term_garbage():
 # --- the user's example: x + y = 3  =>  y = 3 - x ---
 def test_user_example_solves():
     sol = solver.solve_equation("x + y = 3")
+    assert sol["kind"] == "linear"
     assert sol["display"] == "y = \u2212x + 3"
     assert sol["poly"] == {0: 3.0, 1: -1.0}
     assert sol["denom"] == 1.0
@@ -44,16 +47,19 @@ def test_user_example_values():
     assert solver.eval_poly(sol["poly"], 100) / sol["denom"] == -97
 
 
-def test_generate_points_default_range():
-    display, pts = solver.generate_points("x + y = 3")
-    assert display == "y = \u2212x + 3"
+def test_generate_points_default_range_linear():
+    result = solver.generate_points("x + y = 3")
+    assert result["solution"]["display"] == "y = \u2212x + 3"
+    assert result["x_range"] == (1, 100)
+    assert len(result["branches"]) == 1
+    pts = result["branches"][0]["points"]
     assert len(pts) == 100
     assert pts[0] == (1, 2.0)
     assert pts[2] == (3, 0.0)
     assert pts[99] == (100, -97.0)
 
 
-# --- other shapes ---
+# --- other linear shapes ---
 @pytest.mark.parametrize(
     "raw,display",
     [
@@ -70,8 +76,82 @@ def test_generate_points_default_range():
         ("0.5x + y = 2", "y = \u22120.5x + 2"),
     ],
 )
-def test_solve_display(raw, display):
-    assert solver.solve_equation(raw)["display"] == display
+def test_linear_display(raw, display):
+    sol = solver.solve_equation(raw)
+    assert sol["kind"] == "linear"
+    assert sol["display"] == display
+
+
+# --- quadratic in y: circles and friends ---
+def test_circle_solves():
+    sol = solver.solve_equation("x^2 + y^2 = 100")
+    assert sol["kind"] == "quadratic"
+    assert sol["a"] == 1.0
+    assert sol["b"] == 0.0
+    assert sol["poly"] == {0: 100.0, 2: -1.0}
+    assert sol["display"] == "y = \u00b1\u221a(\u2212x^2 + 100)"
+
+
+def test_circle_points_and_auto_range():
+    result = solver.generate_points("x^2 + y^2 = 100")
+    assert result["x_range"] == (-10, 10)
+    assert len(result["branches"]) == 2
+    plus = result["branches"][0]
+    minus = result["branches"][1]
+    assert plus["label"] == "+"
+    assert minus["label"] == "\u2212"
+    assert len(plus["points"]) == 21  # x = -10..10
+    assert len(minus["points"]) == 21
+    by_x = {x: y for x, y in plus["points"]}
+    assert by_x[0] == 10.0
+    assert by_x[6] == 8.0
+    assert by_x[10] == 0.0
+    m_by_x = {x: y for x, y in minus["points"]}
+    assert m_by_x[0] == -10.0
+    assert m_by_x[6] == -8.0
+
+
+def test_circle_explicit_range_respected():
+    result = solver.generate_points("x^2 + y^2 = 100", x_min=1, x_max=10)
+    assert result["x_range"] == (1, 10)
+    plus = result["branches"][0]["points"]
+    assert plus[0] == (1, math.sqrt(99))  # x=1 -> y=+√99
+    assert len(plus) == 10
+
+
+@pytest.mark.parametrize(
+    "raw,display,x_range",
+    [
+        ("y^2 = 4x", "y = \u00b1\u221a(4x)", (0, 200)),
+        ("2y^2 = x^2 + 8", "y = \u00b1\u221a((x^2 + 8) / 2)", (-100, 100)),
+        ("y^2 - x^2 = 1", "y = \u00b1\u221a(x^2 + 1)", (-100, 100)),
+        ("y^2 + y = x", "y = (\u22121 \u00b1 \u221a(1 + 4x)) / 2", (0, 200)),
+    ],
+)
+def test_quadratic_variants(raw, display, x_range):
+    result = solver.generate_points(raw)
+    assert result["solution"]["display"] == display
+    assert result["x_range"] == x_range
+    assert len(result["branches"]) == 2
+
+
+def test_quadratic_general_formula_values():
+    # y² + y = x  →  at x=0: y = (−1 ± 1)/2 = 0 and −1
+    result = solver.generate_points("y^2 + y = x")
+    plus = {x: y for x, y in result["branches"][0]["points"]}
+    minus = {x: y for x, y in result["branches"][1]["points"]}
+    assert plus[0] == 0.0
+    assert minus[0] == -1.0
+
+
+def test_quadratic_no_real_points_raises():
+    with pytest.raises(solver.SolverError, match="No real y"):
+        solver.generate_points("y^2 = -1")
+
+
+def test_quadratic_no_real_points_in_explicit_range():
+    with pytest.raises(solver.SolverError, match="No real y"):
+        solver.generate_points("x^2 + y^2 = 100", x_min=50, x_max=60)
 
 
 # --- error cases ---
@@ -81,7 +161,7 @@ def test_solve_display(raw, display):
         ("x = 5", "no effective y term"),
         ("x + y = 3 = 4", 'Only one "="'),
         ("y = (x)", "Parentheses"),
-        ("y^2 = x", "linear in y"),
+        ("y^3 = x", "linear or quadratic in y"),
         ("x = ", "Both sides"),
         ("= 3", "Both sides"),
         ("y = @#$", "Cannot understand"),
@@ -94,9 +174,9 @@ def test_solve_errors(raw, needle):
     assert needle in str(exc.value)
 
 
-def test_custom_range():
-    _, pts = solver.generate_points("y = 2x", x_min=1, x_max=5)
-    assert [y for _, y in pts] == [2.0, 4.0, 6.0, 8.0, 10.0]
+def test_custom_range_linear():
+    result = solver.generate_points("y = 2x", x_min=1, x_max=5)
+    assert [y for _, y in result["branches"][0]["points"]] == [2.0, 4.0, 6.0, 8.0, 10.0]
 
 
 def test_bad_range():

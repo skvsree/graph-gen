@@ -52,6 +52,7 @@
   th, td { padding: 5px 14px; text-align: right; border-bottom: 1px solid #f1f5f9; }
   th { position: sticky; top: 0; background: #f8fafc; color: #475569; }
   tbody tr:nth-child(even) { background: #f8fafc; }
+  .branch-hdr td { text-align: left; font-weight: 600; background: #f1f5f9; color: #475569; }
 </style>
 </head>
 <body>
@@ -82,7 +83,7 @@
   </div>
 
   <div class="tablebox">
-    <h2>Points (x = 1 … 100)</h2>
+    <h2>Points</h2>
     <div class="table-scroll">
       <table>
         <thead><tr><th>x</th><th>y</th></tr></thead>
@@ -146,7 +147,7 @@ function tokenizeSide(s) {
 }
 
 function parseSide(s) {
-  const res = { xTerms: {}, yCoeff: 0, const: 0 };   // xTerms: exponent -> coefficient
+  const res = { xTerms: {}, yCoeff: 0, y2Coeff: 0, const: 0 };   // xTerms: exponent -> coefficient
   for (const t of tokenizeSide(s)) {
     const term = parseTerm(t);
     if (!term) return { error: 'Cannot understand term: "' + t + '"' };
@@ -154,8 +155,9 @@ function parseSide(s) {
       if (term.exp > 12) return { error: 'Exponent too large: "' + t + '" (max 12)' };
       res.xTerms[term.exp] = (res.xTerms[term.exp] || 0) + term.coeff;
     } else if (term.varName === 'y') {
-      if (term.exp !== 1) return { error: 'Equation must be linear in y: "' + t + '"' };
-      res.yCoeff += term.coeff;
+      if (term.exp === 1) res.yCoeff += term.coeff;
+      else if (term.exp === 2) res.y2Coeff += term.coeff;
+      else return { error: 'Equation must be linear or quadratic in y: "' + t + '"' };
     } else {
       res.const += term.coeff;
     }
@@ -163,8 +165,27 @@ function parseSide(s) {
   return res;
 }
 
+// Polynomial body like "−2x + 6", "100 − x²" or "0" (descending exponents)
+function polyStr(poly) {
+  const exps = Object.keys(poly).map(Number).sort((a, b) => b - a);
+  const parts = [];
+  for (const e of exps) {
+    const c = poly[e], abs = Math.abs(c);
+    let s;
+    if (e === 0) s = fmt(abs);
+    else if (e === 1) s = (abs === 1 ? '' : fmt(abs)) + 'x';
+    else s = (abs === 1 ? '' : fmt(abs)) + 'x^' + e;
+    if (parts.length === 0) s = (c < 0 ? '\u2212' : '') + s;
+    else s = (c < 0 ? ' \u2212 ' : ' + ') + s;
+    parts.push(s);
+  }
+  return parts.length ? parts.join('') : '0';
+}
+
 // Solve "expr = expr" (or bare "expr", treated as y = expr) for y in terms of x.
-// Returns { poly, denom, display } or { error }.
+// Linear in y -> { kind:'linear', a:0, b, denom, poly, display }
+// Quadratic in y (a·y² + b·y = R(x)) -> { kind:'quadratic', a, b, poly, display }
+// Returns { error } on failure.
 function solveEquation(raw) {
   let s = String(raw).replace(/\s+/g, '').replace(/\u2212/g, '-');
   if (!s) return { error: 'Enter a formula first.' };
@@ -183,10 +204,9 @@ function solveEquation(raw) {
   const lhs = parseSide(lhsStr); if (lhs.error) return lhs;
   const rhs = parseSide(rhsStr); if (rhs.error) return rhs;
 
-  // Move everything to the right:  yCoeff * y = sum(coeff_e * x^e)
-  let yC = lhs.yCoeff - rhs.yCoeff;
-  if (yC === 0) return { error: 'Equation has no effective y term — cannot solve for y.' };
-
+  // Normalise to:  a·y² + b·y = R(x)
+  let a = lhs.y2Coeff - rhs.y2Coeff;
+  let b = lhs.yCoeff - rhs.yCoeff;
   const poly = {};
   for (const e of new Set([...Object.keys(lhs.xTerms), ...Object.keys(rhs.xTerms)].map(Number))) {
     const c = (rhs.xTerms[e] || 0) - (lhs.xTerms[e] || 0);
@@ -195,25 +215,41 @@ function solveEquation(raw) {
   const c0 = rhs.const - lhs.const;
   if (c0 !== 0) poly[0] = (poly[0] || 0) + c0;
 
-  if (yC < 0) { for (const e of Object.keys(poly)) poly[e] = -poly[e]; yC = -yC; }
-
-  // Human-readable form
-  const exps = Object.keys(poly).map(Number).sort((a, b) => b - a);
-  const parts = [];
-  for (const e of exps) {
-    const c = poly[e], abs = Math.abs(c);
-    let s;
-    if (e === 0) s = fmt(abs);
-    else if (e === 1) s = (abs === 1 ? '' : fmt(abs)) + 'x';
-    else s = (abs === 1 ? '' : fmt(abs)) + 'x^' + e;
-    if (parts.length === 0) s = (c < 0 ? '\u2212' : '') + s;
-    else s = (c < 0 ? ' \u2212 ' : ' + ') + s;
-    parts.push(s);
+  if (a !== 0) {
+    if (a < 0) { a = -a; b = -b; for (const e of Object.keys(poly)) poly[e] = -poly[e]; }
+    if (b === 0) {
+      // y² = R/a  →  y = ±√(R/a)
+      const rb = polyStr(poly);
+      const display = (a === 1)
+        ? 'y = \u00b1\u221a(' + rb + ')'
+        : 'y = \u00b1\u221a((' + rb + ') / ' + fmt(a) + ')';
+      return { kind: 'quadratic', a: a, b: 0, poly: poly, display: display };
+    }
+    // y = (−b ± √(b² + 4aR)) / (2a)
+    let dStr;
+    if (Object.keys(poly).length === 0) dStr = fmt(b * b);
+    else {
+      let rDisp = polyStr(poly);
+      const mult = fmt(4 * a);
+      if (Object.keys(poly).length > 1 || rDisp.charAt(0) === '\u2212') {
+        dStr = fmt(b * b) + ' + ' + mult + '\u00b7(' + rDisp + ')';
+      } else {
+        dStr = fmt(b * b) + ' + ' + mult + rDisp;
+      }
+    }
+    const negB = -b;
+    const num = (negB < 0 ? '\u2212' + fmt(-negB) : fmt(negB)) + ' \u00b1 \u221a(' + dStr + ')';
+    const denom = fmt(2 * a);
+    const display = (denom === '1') ? ('y = ' + num) : ('y = (' + num + ') / ' + denom);
+    return { kind: 'quadratic', a: a, b: b, poly: poly, display: display };
   }
-  const body = parts.length ? parts.join('') : '0';
-  const display = (yC === 1) ? ('y = ' + body) : ('y = (' + body + ') / ' + fmt(yC));
 
-  return { poly: poly, denom: yC, display: display };
+  // Linear: b·y = R(x)
+  if (b === 0) return { error: 'Equation has no effective y term — cannot solve for y.' };
+  if (b < 0) { b = -b; for (const e of Object.keys(poly)) poly[e] = -poly[e]; }
+  const rb = polyStr(poly);
+  const display = (b === 1) ? ('y = ' + rb) : ('y = (' + rb + ') / ' + fmt(b));
+  return { kind: 'linear', a: 0, b: b, denom: b, poly: poly, display: display };
 }
 
 function evalPoly(poly, x) {
@@ -222,15 +258,89 @@ function evalPoly(poly, x) {
   return s;
 }
 
+function discriminant(sol, x) {
+  return sol.b * sol.b + 4 * sol.a * evalPoly(sol.poly, x);
+}
+
+// Default x range: linear -> 1..100; quadratic -> domain of real y.
+function autoRange(sol) {
+  if (sol.kind !== 'quadratic') return { min: 1, max: 100 };
+  const d = x => discriminant(sol, x);
+  let anchor = 0;
+  if (d(0) < 0) {
+    let found = false;
+    for (let x = 1; x <= 10000; x++) {
+      if (d(x) >= 0) { anchor = x; found = true; break; }
+      if (d(-x) >= 0) { anchor = -x; found = true; break; }
+    }
+    if (!found) return { min: 0, max: 0 };
+  }
+  const scan = step => {
+    let x = anchor;
+    while (Math.abs(x) <= 10000) {
+      if (d(x) < 0) return x - step;
+      x += step;
+    }
+    return null;
+  };
+  let right = scan(1), left = scan(-1);
+  if (right === null && left === null) return { min: -100, max: 100 };
+  if (right === null) right = left + 200;
+  if (left === null) left = right - 200;
+  return { min: left, max: right };
+}
+
+// Build branch points for a solution. Returns { xRange, branches } or { error }.
+function buildBranches(sol, xMin, xMax) {
+  let lo = xMin, hi = xMax;
+  if (lo === undefined || hi === undefined) {
+    const r = autoRange(sol);
+    lo = r.min; hi = r.max;
+  }
+  let step = 1;
+  const span = hi - lo;
+  if (sol.kind === 'quadratic' && (xMin === undefined || xMax === undefined) && span > 400) {
+    step = Math.ceil(span / 400);
+  }
+  if (sol.kind === 'linear') {
+    const pts = [];
+    for (let x = lo; x <= hi; x += step) {
+      const y = evalPoly(sol.poly, x) / sol.b;
+      if (!isFinite(y)) return { error: 'Result overflows at x = ' + x + ' — exponents too large?' };
+      pts.push({ x: x, y: y });
+    }
+    return { xRange: { min: lo, max: hi }, branches: [{ label: '', points: pts }] };
+  }
+  const plus = [], minus = [];
+  for (let x = lo; x <= hi; x += step) {
+    const d = discriminant(sol, x);
+    if (d < 0) continue;
+    if (!isFinite(d)) return { error: 'Result overflows at x = ' + x + ' — exponents too large?' };
+    const root = Math.sqrt(d);
+    const y1 = (-sol.b + root) / (2 * sol.a);
+    const y2 = (-sol.b - root) / (2 * sol.a);
+    if (!isFinite(y1) || !isFinite(y2)) return { error: 'Result overflows at x = ' + x + ' — exponents too large?' };
+    plus.push({ x: x, y: y1 });
+    minus.push({ x: x, y: y2 });   // tangency points (root === 0) belong to both branches
+  }
+  if (!plus.length && !minus.length) return { error: 'No real y for the given x range.' };
+  return {
+    xRange: { min: lo, max: hi },
+    branches: [{ label: '+', points: plus }, { label: '\u2212', points: minus }],
+  };
+}
+
 /* ================= drawing ================= */
 
-function draw(pts) {
+function draw(branches) {
   const cv = document.getElementById('graph');
   const ctx = cv.getContext('2d');
   const W = cv.width, H = cv.height;
   ctx.clearRect(0, 0, W, H);
 
-  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+  const all = [];
+  branches.forEach(br => { for (const p of br.points) all.push(p); });
+  const xs = all.map(p => p.x), ys = all.map(p => p.y);
   const yMin = Math.min(...ys), yMax = Math.max(...ys);
   const xMin = Math.min(...xs), xMax = Math.max(...xs);
 
@@ -274,34 +384,51 @@ function draw(pts) {
   ctx.fillText('x', W - 20, cy - 10);
   ctx.fillText('y', cx + 12, 18);
 
-  // Line through the points
-  ctx.strokeStyle = '#2563eb'; ctx.lineWidth = 2.5;
-  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  ctx.beginPath();
-  for (let i = 0; i < pts.length; i++) {
-    const px = X(pts[i].x), py = Y(pts[i].y);
-    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-  }
-  ctx.stroke();
-
-  // Point markers — only when the unit spacing is wide enough that they
-  // don't merge into a solid ribbon (x = 1..100 on a 900px canvas is ~2.5px
-  // per unit, so dots are skipped and the polyline alone carries the plot).
-  if (unit >= 6) {
-    ctx.fillStyle = '#dc2626';
-    for (const p of pts) {
-      const px = X(p.x), py = Y(p.y);
-      if (px < 0 || px > W || py < 0 || py > H) continue;
-      ctx.beginPath(); ctx.arc(px, py, 2.5, 0, Math.PI * 2); ctx.fill();
+  // Line through each branch's points (branch 0 blue, branch 1 teal)
+  const colors = ['#2563eb', '#0d9488'];
+  branches.forEach((br, bi) => {
+    if (!br.points.length) return;
+    ctx.strokeStyle = colors[bi % colors.length];
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (let i = 0; i < br.points.length; i++) {
+      const px = X(br.points[i].x), py = Y(br.points[i].y);
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
     }
-  }
+    ctx.stroke();
+
+    // Point markers — only when the unit spacing is wide enough that they
+    // don't merge into a solid ribbon (x = 1..100 on a 900px canvas is ~2.5px
+    // per unit, so dots are skipped and the polyline alone carries the plot).
+    if (unit >= 6) {
+      ctx.fillStyle = colors[bi % colors.length];
+      for (const p of br.points) {
+        const px = X(p.x), py = Y(p.y);
+        if (px < 0 || px > W || py < 0 || py > H) continue;
+        ctx.beginPath(); ctx.arc(px, py, 2.5, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+  });
 }
 
 /* ================= UI ================= */
 
-function renderTable(pts) {
-  document.getElementById('points').innerHTML =
-    pts.map(p => '<tr><td>' + p.x + '</td><td>' + fmt(p.y) + '</td></tr>').join('');
+function renderTable(branches) {
+  const tb = document.getElementById('points');
+  if (branches.length === 1) {
+    tb.innerHTML = branches[0].points
+      .map(p => '<tr><td>' + p.x + '</td><td>' + fmt(p.y) + '</td></tr>').join('');
+    return;
+  }
+  let html = '';
+  for (const br of branches) {
+    html += '<tr class="branch-hdr"><td colspan="2">branch ' + br.label + '</td></tr>';
+    html += br.points
+      .map(p => '<tr><td>' + p.x + '</td><td>' + fmt(p.y) + '</td></tr>').join('');
+  }
+  tb.innerHTML = html;
 }
 
 function showError(msg) {
@@ -333,25 +460,24 @@ async function plot(raw) {
   }
 
   if (!data && !errMsg) {
-    const local = solveEquation(raw);
-    if (local.error) { showError(local.error); document.getElementById('solved').textContent = ''; return; }
-    const pts = [];
-    for (let x = 1; x <= 100; x++) {
-      const y = evalPoly(local.poly, x) / local.denom;
-      if (!isFinite(y)) { showError('Result overflows at x = ' + x + ' — exponents too large?'); return; }
-      pts.push({ x: x, y: y });
-    }
-    data = { display: local.display, points: pts };
+    const sol = solveEquation(raw);
+    if (sol.error) { showError(sol.error); document.getElementById('solved').textContent = ''; return; }
+    const built = buildBranches(sol);
+    if (built.error) { showError(built.error); document.getElementById('solved').textContent = ''; return; }
+    data = { display: sol.display, kind: sol.kind, x_range: built.xRange, branches: built.branches };
   }
 
   if (seq !== plotSeq) return;   // a newer plot superseded this one
   if (errMsg) { showError(errMsg); document.getElementById('solved').textContent = ''; return; }
 
   clearError();
+  const rng = data.x_range;
+  const branchNote = data.branches.length > 1 ? (' \u00b7 ' + data.branches.length + ' branches') : '';
   document.getElementById('solved').textContent =
-    'Given:  ' + raw.trim() + '    \u2192    ' + data.display + '    (plotted for x = 1 \u2026 100)';
-  draw(data.points);
-  renderTable(data.points);
+    'Given:  ' + raw.trim() + '    \u2192    ' + data.display +
+    '    (plotted for x = ' + rng.min + ' \u2026 ' + rng.max + branchNote + ')';
+  draw(data.branches);
+  renderTable(data.branches);
   try { history.replaceState(null, '', '?formula=' + encodeURIComponent(raw)); } catch (e) {}
 }
 

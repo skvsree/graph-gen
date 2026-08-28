@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>xy-graph-gen — Formula Grapher</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23f8fafc'/%3E%3Cpath d='M0 8h16M8 0v16' stroke='%23cbd5e1'/%3E%3Cpath d='M1 13L15 3' stroke='%232563eb' stroke-width='2'/%3E%3C/svg%3E">
 <style>
   * { box-sizing: border-box; }
   body {
@@ -447,6 +448,7 @@ let plotSeq = 0;
 
 async function plot(raw) {
   const seq = ++plotSeq;
+  let data = null, errMsg = null;
   // Keep the query string in sync with the input immediately on click, so the
   // URL always reproduces what was typed (works even when the plot errors).
   try { history.replaceState(null, '', '?formula=' + encodeURIComponent(raw)); } catch (e) {}

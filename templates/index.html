@@ -98,6 +98,8 @@
   canvas { width: 100%; height: auto; display: block; cursor: grab; touch-action: none; }
   .meta { font-size: 12.5px; color: var(--muted); margin-top: 8px; }
   .table-scroll { max-height: 220px; overflow: auto; }
+  .tablebox { margin-top: 16px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .tablebox h2 { font-size: 14px; margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--fg-soft); }
   .accordion {
     border: 1px solid var(--border); border-radius: 12px; background: var(--card);
     margin-top: 14px; overflow: hidden;
@@ -109,11 +111,10 @@
   .accordion summary::-webkit-details-marker { display: none; }
   .accordion summary::before { content: '\25b8 '; }
   .accordion[open] summary::before { content: '\25be '; }
-  .accordion .chips, .accordion .table-scroll { margin: 0 14px 12px; }
+  .accordion .chips { margin: 0 14px 12px; }
   /* Belt-and-braces: never let a closed accordion paint its content, even in
      browsers where <details> fails to hide it. */
-  .accordion:not([open]) .chips,
-  .accordion:not([open]) .table-scroll { display: none !important; }
+  .accordion:not([open]) .chips { display: none !important; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; font-family: ui-monospace, Consolas, monospace; }
   th, td { padding: 5px 14px; text-align: right; border-bottom: 1px solid var(--row-border); color: var(--fg); }
   th { position: sticky; top: 0; background: var(--bg); color: var(--muted); }
@@ -165,27 +166,30 @@
     <button type="button" class="btn-secondary" id="gridBtn" title="Toggle grid lines">Grid: on</button>
   </form>
 
-  <div class="chips" id="chips">
-    <button class="chip" type="button">x + y = 3</button>
-    <button class="chip" type="button">y = 2x + 1</button>
-    <button class="chip" type="button">2x + 3y = 6</button>
-    <button class="chip" type="button">y = x^2 − 10x + 10</button>
-    <button class="chip" type="button">x^2 + y^2 = 100</button>
-    <button class="chip" type="button">y = sin(x)</button>
-    <button class="chip" type="button">y = sqrt(x)</button>
-    <button class="chip" type="button">y = e^x</button>
-  </div>
+  <details class="accordion" id="samplesAccordion">
+    <summary>Samples</summary>
+    <div class="chips" id="chips">
+      <button class="chip" type="button">x + y = 3</button>
+      <button class="chip" type="button">y = 2x + 1</button>
+      <button class="chip" type="button">2x + 3y = 6</button>
+      <button class="chip" type="button">y = x^2 − 10x + 10</button>
+      <button class="chip" type="button">x^2 + y^2 = 100</button>
+      <button class="chip" type="button">y = sin(x)</button>
+      <button class="chip" type="button">y = sqrt(x)</button>
+      <button class="chip" type="button">y = e^x</button>
+    </div>
 
-  <div class="chips" id="chipsPolar" style="display:none">
-    <button class="chip" type="button">r = 2θ</button>
-    <button class="chip" type="button">r = 2/θ</button>
-    <button class="chip" type="button">r = cos(2θ)</button>
-    <button class="chip" type="button">r = 1 + cos(θ)</button>
-    <button class="chip" type="button">r = 2 + sin(3θ)</button>
-    <button class="chip" type="button">r = e^(θ/10)</button>
-    <button class="chip" type="button">r = sqrt(θ)</button>
-    <button class="chip" type="button">r = sin(θ)</button>
-  </div>
+    <div class="chips" id="chipsPolar" style="display:none">
+      <button class="chip" type="button">r = 2θ</button>
+      <button class="chip" type="button">r = 2/θ</button>
+      <button class="chip" type="button">r = cos(2θ)</button>
+      <button class="chip" type="button">r = 1 + cos(θ)</button>
+      <button class="chip" type="button">r = 2 + sin(3θ)</button>
+      <button class="chip" type="button">r = e^(θ/10)</button>
+      <button class="chip" type="button">r = sqrt(θ)</button>
+      <button class="chip" type="button">r = sin(θ)</button>
+    </div>
+  </details>
 
   <details class="accordion" id="historyAccordion">
     <summary>History</summary>
@@ -202,15 +206,15 @@
     <div class="meta" id="meta"></div>
   </div>
 
-  <details class="accordion" id="samplesAccordion">
-    <summary>Samples</summary>
+  <div class="tablebox">
+    <h2>Points</h2>
     <div class="table-scroll">
       <table>
         <thead><tr><th id="colX">x</th><th id="colY">y</th></tr></thead>
         <tbody id="points"></tbody>
       </table>
     </div>
-  </details>
+  </div>
 </div>
 
 <script>

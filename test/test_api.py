@@ -78,6 +78,22 @@ def test_api_points_polar_explicit_theta_range():
     assert len(body["curves"][0]["branches"][0]["points"]) == 315
 
 
+def test_api_points_polar_carries_theta_and_r():
+    r = client.get("/api/points", params={"formula": "r = 2θ", "mode": "polar"})
+    assert r.status_code == 200
+    pts = r.json()["curves"][0]["branches"][0]["points"]
+    assert set(pts[0].keys()) == {"x", "y", "theta", "r"}
+    assert pts[0]["theta"] == 0.0 and pts[0]["r"] == 0.0
+    assert pts[1]["r"] == pytest.approx(2 * pts[1]["theta"])
+
+
+def test_api_points_cartesian_points_have_no_theta():
+    r = client.get("/api/points", params={"formula": "y = 2x + 1"})
+    assert r.status_code == 200
+    pts = r.json()["curves"][0]["branches"][0]["points"]
+    assert set(pts[0].keys()) == {"x", "y"}
+
+
 def test_api_points_polar_invalid_returns_400():
     r = client.get("/api/points", params={"formula": "r^2 = 2θ", "mode": "polar"})
     assert r.status_code == 400

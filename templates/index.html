@@ -149,6 +149,8 @@
     <button type="button" class="btn-secondary" id="copyBtn" title="Copy a shareable link to this graph">Copy link</button>
     <button type="button" class="btn-secondary" id="themeBtn" title="Toggle dark / light theme">🌙 Dark</button>
     <button type="button" class="btn-secondary" id="gridBtn" title="Toggle grid lines">Grid: on</button>
+    <button type="button" class="btn-secondary" id="histToggleBtn" title="Show / hide formula history">History: on</button>
+    <button type="button" class="btn-secondary" id="samplesToggleBtn" title="Show / hide the points table">Samples: on</button>
   </form>
 
   <div class="chips" id="chips">
@@ -178,7 +180,7 @@
     <h2>Points</h2>
     <div class="table-scroll">
       <table>
-        <thead><tr><th>x</th><th>y</th></tr></thead>
+        <thead><tr><th id="colX">x</th><th id="colY">y</th></tr></thead>
         <tbody id="points"></tbody>
       </table>
     </div>
@@ -872,7 +874,7 @@ function buildBranches(sol, xMin, xMax, xStep) {
         if (cur.length) { segments.push(cur); cur = []; }
         continue;
       }
-      cur.push({ x: px, y: py });
+      cur.push({ x: px, y: py, theta: th, r: r });
     }
     if (cur.length) segments.push(cur);
     if (!segments.length) return { error: 'No real points for the given \u03b8 range.' };
@@ -1154,6 +1156,8 @@ function setMode(m) {
   if (m !== 'cartesian' && m !== 'polar') m = 'cartesian';
   mode = m;
   applyModeUI();
+  renderHistory();   // this tab's own history ring
+  applyShowState();  // this tab's own toggle preferences
   plot();
 }
 
@@ -1220,6 +1224,9 @@ function refreshDots() {
 
 function renderTable(curves, colors) {
   const tb = document.getElementById('points');
+  const polar = mode === 'polar';
+  document.getElementById('colX').textContent = polar ? 'θ' : 'x';
+  document.getElementById('colY').textContent = polar ? 'r' : 'y';
   let html = '';
   curves.forEach(function (c, ci) {
     const color = (colors && colors[ci]) || '#2563eb';
@@ -1231,7 +1238,9 @@ function renderTable(curves, colors) {
         html += '<tr class="branch-hdr"><td colspan="2">&nbsp;&nbsp;branch ' + br.label + '</td></tr>';
       }
       html += br.points
-        .map(p => '<tr><td>' + fmt(p.x) + '</td><td>' + fmt(p.y) + '</td></tr>').join('');
+        .map(p => polar
+          ? '<tr><td>' + fmt(p.theta) + '</td><td>' + fmt(p.r) + '</td></tr>'
+          : '<tr><td>' + fmt(p.x) + '</td><td>' + fmt(p.y) + '</td></tr>').join('');
     });
   });
   tb.innerHTML = html;
@@ -1414,20 +1423,23 @@ async function plot() {
   renderHistory();
 }
 
-/* ================= history (localStorage ring buffer) ================= */
+/* ================= history (per-mode localStorage ring buffer) ================= */
 
-const HISTORY_KEY = 'xygh:history';
 const HISTORY_MAX = 12;
+
+function historyKey() {
+  return 'xygh:history:' + (mode === 'polar' ? 'polar' : 'cartesian');
+}
 
 function loadHistory() {
   try {
-    const raw = localStorage.getItem(HISTORY_KEY);
+    const raw = localStorage.getItem(historyKey());
     const arr = raw ? JSON.parse(raw) : [];
     return Array.isArray(arr) ? arr.filter(x => typeof x === 'string') : [];
   } catch (e) { return []; }
 }
 function saveHistory(arr) {
-  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(arr)); } catch (e) {}
+  try { localStorage.setItem(historyKey(), JSON.stringify(arr)); } catch (e) {}
 }
 function pushHistory(formula) {
   const arr = loadHistory().filter(f => f !== formula);
@@ -1438,7 +1450,7 @@ function renderHistory() {
   const box = document.getElementById('history');
   const arr = loadHistory();
   box.innerHTML = '';
-  if (!arr.length) { box.style.display = 'none'; return; }
+  if (!arr.length || showPref('history') !== 'on') { box.style.display = 'none'; return; }
   box.style.display = 'flex';
   const label = document.createElement('span');
   label.className = 'range-label';
@@ -1465,7 +1477,32 @@ function renderHistory() {
   box.appendChild(clear);
 }
 
-/* ================= theme / grid toggles ================= */
+/* ================= theme / grid / history / samples toggles ================= */
+
+// Per-mode show/hide state for the history chips and the samples table, so
+// each tab remembers its own preferences (key includes the current mode).
+function showKey(kind) {
+  return 'xygh:show:' + kind + ':' + (mode === 'polar' ? 'polar' : 'cartesian');
+}
+function showPref(kind) {
+  try {
+    const v = localStorage.getItem(showKey(kind));
+    return v === null ? 'on' : v;
+  } catch (e) { return 'on'; }
+}
+function applyShowState() {
+  const h = showPref('history') === 'on';
+  const s = showPref('samples') === 'on';
+  document.getElementById('histToggleBtn').textContent = h ? 'History: on' : 'History: off';
+  document.getElementById('samplesToggleBtn').textContent = s ? 'Samples: on' : 'Samples: off';
+  document.querySelector('.tablebox').style.display = s ? '' : 'none';
+  renderHistory();
+}
+function toggleShow(kind) {
+  const nv = showPref(kind) === 'on' ? 'off' : 'on';
+  try { localStorage.setItem(showKey(kind), nv); } catch (e) {}
+  applyShowState();
+}
 
 function applyTheme(t) {
   document.documentElement.setAttribute('data-theme', t);
@@ -1498,6 +1535,8 @@ function init() {
   document.getElementById('copyBtn').addEventListener('click', copyLink);
   document.getElementById('themeBtn').addEventListener('click', toggleTheme);
   document.getElementById('gridBtn').addEventListener('click', toggleGrid);
+  document.getElementById('histToggleBtn').addEventListener('click', function () { toggleShow('history'); });
+  document.getElementById('samplesToggleBtn').addEventListener('click', function () { toggleShow('samples'); });
 
   const cv = document.getElementById('graph');
   cv.addEventListener('pointerdown', canvasPointerDown);
@@ -1520,6 +1559,7 @@ function init() {
   applyModeUI();
   onRowsChanged();
   renderHistory();
+  applyShowState();
   plot();
 }
 

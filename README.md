@@ -48,7 +48,7 @@ Open http://127.0.0.1:8123
 | Endpoint | Description |
 |---|---|
 | `GET /` | Renders the graph page. The formula is a query param: `/?formula=x%20%2B%20y%20%3D%203`. The page keeps the URL in sync (`?formula=…`) as you plot, so links are shareable. `?mode=polar` opens the polar tab (default `cartesian`). |
-| `GET /api/points?mode=…&formula=…&formula=…&x_min=…&x_max=…&x_step=…` | Solves one or more formulas (max 5, repeated `formula=` params) and returns the curves as JSON: `{"mode", "formulas", "x_range": {"min","max"}, "step", "curves": [{"formula", "display", "kind", "branches": [{"label","points": [{"x","y"}, …]}, …]}, …]}`. `mode` is `cartesian` (default) or `polar`. Linear formulas return one branch, quadratic-in-`y` two ("+", "−"), function formulas one per contiguous segment. `x_min`/`x_max`/`x_step` (fractions allowed; step must be > 0 and ≤ 1000; both range bounds required together) override the default range and sampling — e.g. `x_step=0.1` for a smooth trig curve. In polar mode they bound θ. Invalid formulas (or no real points) return `400` with a human-readable `detail`. |
+| `GET /api/points?mode=…&formula=…&formula=…&x_min=…&x_max=…&x_step=…` | Solves one or more formulas (max 5, repeated `formula=` params) and returns the curves as JSON: `{"mode", "formulas", "x_range": {"min","max"}, "step", "curves": [{"formula", "display", "kind", "branches": [{"label","points": [{"x","y"}, …]}, …]}, …]}`. `mode` is `cartesian` (default) or `polar`. Linear formulas return one branch, quadratic-in-`y` two ("+", "−"), function formulas one per contiguous segment. Polar points also carry `theta` and `r` (`{"x","y","theta","r"}`) so the table can show θ/r. `x_min`/`x_max`/`x_step` (fractions allowed; step must be > 0 and ≤ 1000; both range bounds required together) override the default range and sampling — e.g. `x_step=0.1` for a smooth trig curve. In polar mode they bound θ. Invalid formulas (or no real points) return `400` with a human-readable `detail`. |
 | `GET /health` | Liveness probe: `{"status": "ok", "app": "xy-graph-gen"}` |
 
 ## Supported input
@@ -156,7 +156,8 @@ P3 = bigger / probably not worth it.
 ### P2 — capability upgrades
 - [x] General functions: `sin`, `cos`, `tan`, `log`, `sqrt`, `exp`, `abs` (real grapher territory)
 - [x] Multiple formulas on one graph with legend (batch `/api/points` or comma-separated input)
-- [x] Polar mode in a second tab (`?mode=polar&formula=r+%3D+2%CE%B8`; `r = f(θ)` with `θ`/`theta` for the angle, `x_min`/`x_max`/`x_step` bound θ)
+- [x] Polar mode in a second tab (`?mode=polar&formula=r+%3D+2%CE%B8`; `r = f(θ)` with `θ`/`theta` for the angle, `x_min`/`x_max`/`x_step` bound θ; the points table shows θ and r in polar mode)
+- [x] History & samples toggles — hide/show the history chips and points table; each tab keeps its own history ring and toggle preferences (`xygh:history:cartesian` / `xygh:history:polar`)
 - [ ] Derivative + tangent lines (symbolic for polynomials — cheap: differentiate the coefficient map)
 - [ ] Intersection points between curves (solve linear/quadratic pairs symbolically)
 - [x] Zoom & pan on the canvas (drag to pan, wheel to zoom)

@@ -388,11 +388,22 @@ def test_polar_explicit_theta_range():
     assert len(result["branches"][0]["points"]) == 315  # nice step 0.01 → 315 points
 
 
+def test_cartesian_points_remain_2tuples():
+    for f in ("y = 2x + 1", "y = sin(x)", "x^2 + y^2 = 100"):
+        result = solver.generate_points(f)
+        pts = result["branches"][0]["points"]
+        assert pts and all(len(p) == 2 for p in pts), f
+
+
 def test_polar_rose():
     # r = cos(2θ) is a four-petal rose; all points within the unit circle
     result = solver.generate_points("r = cos(2θ)", mode="polar")
     pts = result["branches"][0]["points"]
-    assert all(math.hypot(x, y) <= 1.0 + 1e-9 for x, y in pts)
+    assert all(math.hypot(x, y) <= 1.0 + 1e-9 for x, y, th, r in pts)
+    # polar points carry (x, y, theta, r) so the table can show θ and r
+    assert len(pts[0]) == 4
+    assert pts[0][2] == pytest.approx(0.0)  # first θ sample
+    assert pts[0][3] == pytest.approx(1.0)  # cos(2·0) = 1
 
 
 def test_polar_division_zero_splits_segments():

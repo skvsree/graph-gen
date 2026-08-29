@@ -195,6 +195,12 @@ check('polar division', solveEquation('r = 2/θ', true).display, 'r = 2 / θ');
   check('polar 252 pts', b.branches[0].points.length, 252);
   const near = b.branches[0].points.filter(p => Math.abs(p.y - Math.PI) < 0.1 && Math.abs(p.x) < 0.1);
   check('polar θ=π/2 maps to (≈0, π)', near.length >= 1, true);
+  const p1 = b.branches[0].points[1];
+  check('polar points carry theta+r', p1.theta === 0.05 && Math.abs(p1.r - 0.1) < 1e-12, true);
+  const allOk = b.branches[0].points.every(p => Math.abs(p.r - 2 * p.theta) < 1e-9);
+  check('polar r = 2θ everywhere', allOk, true);
+  const cart = buildBranches(solveEquation('y = 2x + 1')).branches[0].points[0];
+  check('cartesian points carry no theta', cart.theta === undefined && cart.r === undefined, true);
 }
 function checkErrPolar(name, raw, needle) {
   const sol = solveEquation(raw, true);

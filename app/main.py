@@ -110,13 +110,29 @@ def api_points(
                 "display": r["solution"]["display"],
                 "kind": r["solution"]["kind"],
                 "branches": [
-                    {"label": b["label"], "points": [{"x": x, "y": y} for x, y in b["points"]]}
+                    {
+                        "label": b["label"],
+                        "points": [_point(p) for p in b["points"]],
+                    }
                     for b in r["branches"]
                 ],
             }
             for f, r in zip(formulas, results)
         ],
     }
+
+
+def _point(p) -> dict:
+    """Serialise a branch point.
+
+    Cartesian points are ``(x, y)``; polar points carry the extra
+    ``(x, y, theta, r)`` so the table can show θ and r.
+    """
+    d = {"x": p[0], "y": p[1]}
+    if len(p) == 4:
+        d["theta"] = p[2]
+        d["r"] = p[3]
+    return d
 
 
 @app.get("/health")

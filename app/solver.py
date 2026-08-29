@@ -766,7 +766,7 @@ def _generate_polar(
                 segments.append(cur)
                 cur = []
             continue
-        cur.append((x, y))
+        cur.append((x, y, th, r))
     if cur:
         segments.append(cur)
     if not segments:

@@ -107,7 +107,7 @@ P3 = bigger / probably not worth it.
 ### P1 — planned next
 - [x] x-range + step controls in the UI (`x_min` / `x_max` / step inputs; today they only work via URL/API)
 - [x] Export graph as PNG + "Copy link" button (`canvas.toDataURL()` + existing `?formula=` share)
-- [x] GitHub Actions CI (pytest + node tests on push)
+- [ ] GitHub Actions CI (pytest + node tests on push) — workflow written & tested locally, but push is **blocked**: the PAT needs `Workflows: Read and write` scope
 
 ### P2 — capability upgrades
 - [ ] General functions: `sin`, `cos`, `tan`, `log`, `sqrt`, `exp`, `abs` (real grapher territory)

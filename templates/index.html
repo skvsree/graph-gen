@@ -1050,6 +1050,14 @@ function assignColors(n) {
   curveColors = CURVE_PALETTE.slice(0, n);
 }
 
+// The formula row the user last worked in — chips fill this row, falling
+// back to row 0 when nothing has been focused.
+let activeFormulaInput = null;
+function activeFormulaField() {
+  if (activeFormulaInput && document.body.contains(activeFormulaInput)) return activeFormulaInput;
+  return document.getElementById('formula');
+}
+
 // Non-empty, deduped list of formulas from the input rows (max 5 rows in UI).
 function collectFormulas() {
   const out = [];
@@ -1341,7 +1349,7 @@ function renderHistory() {
     b.textContent = f;
     b.title = f;
     b.addEventListener('click', function () {
-      document.getElementById('formula').value = f;
+      activeFormulaField().value = f;
       plot();
     });
     box.appendChild(b);
@@ -1372,11 +1380,17 @@ function toggleGrid() {
 
 function init() {
   const form = document.getElementById('form');
-  const input = document.getElementById('formula');
   form.addEventListener('submit', function (e) { e.preventDefault(); plot(); });
   document.getElementById('addFormulaBtn').addEventListener('click', function () { addFormulaRow(); });
   document.querySelectorAll('#formulaRows .row-del').forEach(function (b) {
     b.addEventListener('click', function () { b.closest('.formula-row').remove(); onRowsChanged(); });
+  });
+  // Remember which formula row the user is working in, so chips fill that
+  // row instead of always the first one.
+  document.getElementById('formulaRows').addEventListener('focusin', function (e) {
+    if (e.target && e.target.classList && e.target.classList.contains('formula-input')) {
+      activeFormulaInput = e.target;
+    }
   });
   document.getElementById('pngBtn').addEventListener('click', exportPng);
   document.getElementById('copyBtn').addEventListener('click', copyLink);
@@ -1392,7 +1406,7 @@ function init() {
   cv.addEventListener('dblclick', canvasDblClick);
 
   document.querySelectorAll('#chips .chip').forEach(function (ch) {
-    ch.addEventListener('click', function () { input.value = ch.textContent; plot(); });
+    ch.addEventListener('click', function () { activeFormulaField().value = ch.textContent; plot(); });
   });
 
   let savedTheme = 'light';

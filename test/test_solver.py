@@ -202,8 +202,24 @@ def test_step_with_auto_range():
 
 @pytest.mark.parametrize("step", [0, -3, 1001])
 def test_step_out_of_bounds(step):
-    with pytest.raises(solver.SolverError, match="x_step must be between 1 and 1000"):
+    with pytest.raises(solver.SolverError, match="x_step must be"):
         solver.generate_points("y = x", x_min=1, x_max=10, x_step=step)
+
+
+def test_fractional_step():
+    result = solver.generate_points("y = sin(x)", x_min=0, x_max=2, x_step=0.5)
+    assert result["step"] == 0.5
+    assert [x for x, _ in result["branches"][0]["points"]] == [0, 0.5, 1, 1.5, 2]
+
+
+def test_fractional_range():
+    result = solver.generate_points("y = x", x_min=-1, x_max=1, x_step=0.25)
+    assert [x for x, _ in result["branches"][0]["points"]] == [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1]
+
+
+def test_fractional_step_respects_point_cap():
+    with pytest.raises(solver.SolverError, match="Range too large"):
+        solver.generate_points("y = x", x_min=0, x_max=1, x_step=0.0001)
 
 
 def test_partial_range_rejected():
@@ -272,10 +288,13 @@ def test_function_points_sin():
     assert abs(pts[0][1] - math.sin(1)) < 1e-9
 
 
-def test_function_auto_range_is_1_100():
+def test_function_auto_range_and_nice_step():
+    # Default range 1..100 sampled at a "nice" step (~400 points) so trig
+    # curves render smoothly without a manual x_step.
     result = solver.generate_points("y = sin(x)")
     assert result["x_range"] == (1, 100)
-    assert len(result["branches"][0]["points"]) == 100
+    assert result["step"] == 0.5
+    assert len(result["branches"][0]["points"]) == 199
 
 
 def test_function_log_domain_skips_non_positive():

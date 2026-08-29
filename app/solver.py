@@ -747,19 +747,21 @@ def auto_range(sol: dict) -> tuple[int, int]:
 
 
 def generate_points(
-    raw: str, x_min: int | None = None, x_max: int | None = None, x_step: int | None = None
+    raw: str, x_min: float | None = None, x_max: float | None = None, x_step: float | None = None
 ) -> dict:
     """Solve ``raw`` and build branch points.
 
-    Returns ``{"solution", "x_range": (lo, hi), "branches": [...]}`` where each
-    branch is ``{"label", "points": [(x, y), ...]}``. Linear formulas yield one
-    branch (label ""), quadratic ones two ("+", "−").
+    Returns ``{"solution", "x_range": (lo, hi), "step", "branches": [...]}``
+    where each branch is ``{"label", "points": [(x, y), ...]}``. Linear
+    formulas yield one branch (label ""), quadratic ones two ("+", "−"),
+    function formulas one per contiguous segment.
 
     ``x_min``/``x_max`` override the range; when omitted, linear formulas use
-    x = 1..100 and quadratic formulas derive a range from the real domain
-    (see :func:`auto_range`), capped at AUTO_RANGE_LIMIT points per branch.
-    ``x_step`` (>= 1, default 1) controls the sampling; explicit ranges are
-    capped at MAX_POINTS_PER_BRANCH points.
+    x = 1..100, quadratic formulas derive a range from the real domain
+    (see :func:`auto_range`), and function formulas use 1..100 sampled at a
+    "nice" step (~AUTO_RANGE_LIMIT points). ``x_step`` (> 0, <= 1000, may be
+    fractional) controls the sampling; every range is capped at
+    MAX_POINTS_PER_BRANCH points.
     """
     sol = solve_equation(raw)
     if (x_min is None) != (x_max is None):
@@ -773,22 +775,27 @@ def generate_points(
         lo, hi = x_min, x_max
 
     if x_step is not None:
-        if x_step < 1 or x_step > 1000:
-            raise SolverError("x_step must be between 1 and 1000.")
+        if not x_step > 0 or x_step > 1000:
+            raise SolverError("x_step must be > 0 and <= 1000.")
         step = x_step
     else:
-        step = 1
-        if sol["kind"] == "quadratic" and (x_min is None or x_max is None) and hi - lo > AUTO_RANGE_LIMIT:
-            step = math.ceil((hi - lo) / AUTO_RANGE_LIMIT)
-    if (hi - lo) // step + 1 > MAX_POINTS_PER_BRANCH:
+        step = 1.0
+        if x_min is None or x_max is None:
+            if sol["kind"] == "quadratic" and hi - lo > AUTO_RANGE_LIMIT:
+                step = math.ceil((hi - lo) / AUTO_RANGE_LIMIT)
+            elif sol["kind"] == "function":
+                step = nice_ceil((hi - lo) / AUTO_RANGE_LIMIT)
+    n = int((hi - lo) / step + 1e-9) + 1
+    if n > MAX_POINTS_PER_BRANCH:
         raise SolverError(
             f"Range too large (max {MAX_POINTS_PER_BRANCH} points) — increase the step."
         )
+    xs = [lo + i * step for i in range(n) if lo + i * step <= hi + 1e-9]
 
     branches = []
     if sol["kind"] == "linear":
         points = []
-        for x in range(lo, hi + 1, step):
+        for x in xs:
             y = eval_poly(sol["poly"], x) / sol["b"]
             if not math.isfinite(y):
                 raise SolverError(f"Result overflows at x = {x} — exponents too large?")
@@ -803,7 +810,7 @@ def generate_points(
         # not jump across a vertical asymptote.
         segments = []
         cur = []
-        for x in range(lo, hi + 1, step):
+        for x in xs:
             y = _eval_function(sol, x)
             if y is None:
                 if cur:
@@ -818,7 +825,7 @@ def generate_points(
         branches = [{"label": "", "points": seg} for seg in segments]
     else:
         plus, minus = [], []
-        for x in range(lo, hi + 1, step):
+        for x in xs:
             d = _discriminant(sol, x)
             if d < 0:
                 continue

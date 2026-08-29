@@ -72,6 +72,28 @@ def test_api_points_invalid_step_returns_400():
     assert "x_step" in r.json()["detail"]
 
 
+def test_api_points_fractional_step():
+    r = client.get("/api/points", params={"formula": "y = sin(x)", "x_min": 0, "x_max": 2, "x_step": 0.5})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["step"] == 0.5
+    assert [p["x"] for p in body["branches"][0]["points"]] == [0, 0.5, 1, 1.5, 2]
+
+
+def test_api_points_fractional_range():
+    r = client.get("/api/points", params={"formula": "y = x", "x_min": -1.5, "x_max": 1.5})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["x_range"] == {"min": -1.5, "max": 1.5}
+
+
+def test_api_points_non_numeric_step_returns_422():
+    r = client.get("/api/points", params={"formula": "y = x", "x_step": "abc"})
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert isinstance(detail, list)  # FastAPI validation errors: array of objects
+
+
 def test_api_points_partial_range_returns_400():
     r = client.get("/api/points", params={"formula": "y = x", "x_min": 1})
     assert r.status_code == 400
@@ -121,9 +143,10 @@ def test_api_points_function_sin():
     assert body["kind"] == "function"
     assert body["display"] == "y = sin(x)"
     assert body["x_range"] == {"min": 1, "max": 100}
+    assert body["step"] == 0.5
     assert len(body["branches"]) == 1
     pts = body["branches"][0]["points"]
-    assert len(pts) == 100
+    assert len(pts) == 199
     assert abs(pts[0]["y"] - 0.8414709848078965) < 1e-9
 
 

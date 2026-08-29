@@ -80,8 +80,17 @@ checkErr('empty input', '   ', 'Enter a formula');
   check('default step=1', c.step, 1);
 }
 check('partial range error', (() => { const b = buildBranches(solveEquation('y = x'), 1); return b.error || ''; })(), 'Provide both x_min and x_max, or neither.');
-check('step 0 error', (() => { const b = buildBranches(solveEquation('y = x'), 1, 10, 0); return b.error || ''; })(), 'x_step must be between 1 and 1000.');
+check('step 0 error', (() => { const b = buildBranches(solveEquation('y = x'), 1, 10, 0); return b.error || ''; })(), 'x_step must be > 0 and <= 1000.');
 check('range too large error', (() => { const b = buildBranches(solveEquation('y = x'), 1, 1000000); return b.error || ''; })(), 'Range too large (max 5000 points) — increase the step.');
+{
+  const b = buildBranches(solveEquation('y = x'), 0, 2, 0.5);
+  check('fractional step 0.5 x values', b.branches[0].points.map(p => p.x), [0, 0.5, 1, 1.5, 2]);
+  check('fractional step reported', b.step, 0.5);
+}
+{
+  const b = buildBranches(solveEquation('y = x'), -1, 1, 0.25);
+  check('fractional range x values', b.branches[0].points.map(p => p.x), [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1]);
+}
 
 // --- quadratic in y: circles and friends ---
 {
@@ -152,6 +161,12 @@ check('tan display', solveEquation('y = tan(x)').display, 'y = tan(x)');
 {
   const b = buildBranches(solveEquation('y = sin(x)'), 1, 10, 2);
   check('function step respected', b.branches[0].points.map(p => p.x), [1, 3, 5, 7, 9]);
+}
+{
+  const b = buildBranches(solveEquation('y = sin(x)'));
+  check('function auto nice step', b.step, 0.5);
+  check('function auto range', b.xRange, { min: 1, max: 100 });
+  check('function auto 199 pts', b.branches[0].points.length, 199);
 }
 checkErr('y in function', 'y = sin(y)', 'y\' appears inside a function');
 checkErr('unknown function', 'y = foo(x)', 'Unknown function');

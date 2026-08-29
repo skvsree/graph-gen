@@ -49,16 +49,18 @@ def index(
 @app.get("/api/points")
 def api_points(
     formula: str = DEFAULT_FORMULA,
-    x_min: int | None = None,
-    x_max: int | None = None,
-    x_step: int | None = None,
+    x_min: float | None = None,
+    x_max: float | None = None,
+    x_step: float | None = None,
 ) -> dict:
     """Compute the points for a formula.
 
     Linear formulas return one branch; quadratic-in-y formulas (circles, etc.)
-    return two ("+", "−"). ``x_min``/``x_max``/``x_step`` override the range
-    and sampling; with no explicit range, linear formulas use x = 1..100 and
-    quadratic formulas derive a range from the real domain.
+    return two ("+", "−"); function formulas return one per contiguous
+    segment. ``x_min``/``x_max``/``x_step`` (step > 0 and <= 1000, fractional
+    allowed) override the range and sampling; with no explicit range, linear
+    formulas use x = 1..100, quadratic formulas derive a range from the real
+    domain, function formulas use 1..100 at a "nice" step.
     """
     try:
         result = solver.generate_points(formula, x_min, x_max, x_step)

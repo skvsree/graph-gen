@@ -95,11 +95,11 @@
     <input type="text" id="formula" value="{{ formula }}" spellcheck="false" autocomplete="off" placeholder="e.g. y = sin(x)">
     <div class="range-row" id="rangeRow">
       <span class="range-label">x:</span>
-      <input type="number" id="xMin" value="{{ x_min }}" placeholder="auto" min="-100000" max="100000" step="1" title="x from (blank = auto)">
+      <input type="number" id="xMin" value="{{ x_min }}" placeholder="auto" min="-100000" max="100000" step="any" title="x from (blank = auto)">
       <span class="range-label">to</span>
-      <input type="number" id="xMax" value="{{ x_max }}" placeholder="auto" min="-100000" max="100000" step="1" title="x to (blank = auto)">
+      <input type="number" id="xMax" value="{{ x_max }}" placeholder="auto" min="-100000" max="100000" step="any" title="x to (blank = auto)">
       <span class="range-label">step</span>
-      <input type="number" id="xStep" value="{{ x_step }}" placeholder="auto" min="1" max="1000" step="1" title="x step (blank = 1)">
+      <input type="number" id="xStep" value="{{ x_step }}" placeholder="auto" min="0.0001" max="1000" step="any" title="x step (blank = auto; fractions like 0.1 allowed)">
     </div>
     <button type="submit">Plot</button>
     <button type="button" class="btn-secondary" id="pngBtn" title="Download the graph as PNG">Download PNG</button>
@@ -732,20 +732,27 @@ function buildBranches(sol, xMin, xMax, xStep) {
   }
   let step;
   if (xStep !== undefined) {
-    if (xStep < 1 || xStep > 1000) return { error: 'x_step must be between 1 and 1000.' };
+    if (!(xStep > 0) || xStep > 1000) return { error: 'x_step must be > 0 and <= 1000.' };
     step = xStep;
   } else {
     step = 1;
-    if (sol.kind === 'quadratic' && (xMin === undefined || xMax === undefined) && (hi - lo) > 400) {
-      step = Math.ceil((hi - lo) / 400);
+    if (xMin === undefined || xMax === undefined) {
+      if (sol.kind === 'quadratic' && (hi - lo) > 400) step = Math.ceil((hi - lo) / 400);
+      else if (sol.kind === 'function') step = niceCeil((hi - lo) / 400);
     }
   }
-  if (Math.floor((hi - lo) / step) + 1 > 5000) {
+  const n = Math.floor((hi - lo) / step + 1e-9) + 1;
+  if (n > 5000) {
     return { error: 'Range too large (max 5000 points) — increase the step.' };
+  }
+  const xs = [];
+  for (let i = 0; i < n; i++) {
+    const x = lo + i * step;
+    if (x <= hi + 1e-9) xs.push(x);
   }
   if (sol.kind === 'linear') {
     const pts = [];
-    for (let x = lo; x <= hi; x += step) {
+    for (const x of xs) {
       const y = evalPoly(sol.poly, x) / sol.b;
       if (!isFinite(y)) return { error: 'Result overflows at x = ' + x + ' — exponents too large?' };
       pts.push({ x: x, y: y });
@@ -757,7 +764,7 @@ function buildBranches(sol, xMin, xMax, xStep) {
     // and asymptote blow-ups; each contiguous run becomes its own segment.
     const segments = [];
     let cur = [];
-    for (let x = lo; x <= hi; x += step) {
+    for (const x of xs) {
       const num = evalAst(sol.expr, x);
       const den = evalAst(sol.b, x);
       const y = num / den;
@@ -776,7 +783,7 @@ function buildBranches(sol, xMin, xMax, xStep) {
     };
   }
   const plus = [], minus = [];
-  for (let x = lo; x <= hi; x += step) {
+  for (const x of xs) {
     const d = discriminant(sol, x);
     if (d < 0) continue;
     if (!isFinite(d)) return { error: 'Result overflows at x = ' + x + ' — exponents too large?' };
@@ -1010,14 +1017,14 @@ function renderTable(branches) {
   if (!hasLabels) {
     const pts = [];
     branches.forEach(br => { for (const p of br.points) pts.push(p); });
-    tb.innerHTML = pts.map(p => '<tr><td>' + p.x + '</td><td>' + fmt(p.y) + '</td></tr>').join('');
+    tb.innerHTML = pts.map(p => '<tr><td>' + fmt(p.x) + '</td><td>' + fmt(p.y) + '</td></tr>').join('');
     return;
   }
   let html = '';
   for (const br of branches) {
     html += '<tr class="branch-hdr"><td colspan="2">branch ' + br.label + '</td></tr>';
     html += br.points
-      .map(p => '<tr><td>' + p.x + '</td><td>' + fmt(p.y) + '</td></tr>').join('');
+      .map(p => '<tr><td>' + fmt(p.x) + '</td><td>' + fmt(p.y) + '</td></tr>').join('');
   }
   tb.innerHTML = html;
 }
@@ -1111,8 +1118,18 @@ async function plot(raw) {
   try {
     const res = await fetch('/api/points?' + qp.toString());
     const body = await res.json();
-    if (!res.ok) errMsg = (body && body.detail) ? body.detail : ('Server error (' + res.status + ')');
-    else data = body;
+    if (!res.ok) {
+      // FastAPI 422 validation errors put an array of {type, loc, msg, input}
+      // objects in `detail` — join the messages into something readable.
+      const d = body && body.detail;
+      if (Array.isArray(d)) {
+        errMsg = d.map(e => (e && e.msg) ? e.msg : JSON.stringify(e)).join(' \u00b7 ');
+      } else {
+        errMsg = d || ('Server error (' + res.status + ')');
+      }
+    } else {
+      data = body;
+    }
   } catch (e) {
     data = null;
   }
@@ -1122,7 +1139,7 @@ async function plot(raw) {
     if (sol.error) { showError(sol.error); document.getElementById('solved').textContent = ''; return; }
     const rv = id => {
       const t = document.getElementById(id).value.trim();
-      return t === '' ? undefined : parseInt(t, 10);
+      return t === '' ? undefined : parseFloat(t);
     };
     const built = buildBranches(sol, rv('xMin'), rv('xMax'), rv('xStep'));
     if (built.error) { showError(built.error); document.getElementById('solved').textContent = ''; return; }

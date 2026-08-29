@@ -40,7 +40,7 @@ Open http://127.0.0.1:8123
 | Endpoint | Description |
 |---|---|
 | `GET /` | Renders the graph page. The formula is a query param: `/?formula=x%20%2B%20y%20%3D%203`. The page keeps the URL in sync (`?formula=…`) as you plot, so links are shareable. |
-| `GET /api/points?formula=…&x_min=…&x_max=…&x_step=…` | Solves the formula and returns the branches as JSON: `{"formula", "display", "kind", "x_range": {"min","max"}, "step", "branches": [{"label","points": [{"x","y"}, …]}, …]}`. Linear formulas return one branch, quadratic-in-`y` two ("+", "−"), function formulas one per contiguous segment. `x_min`/`x_max`/`x_step` (1–1000, both range bounds required together) override the default range and sampling. Invalid formulas (or no real points) return `400` with a human-readable `detail`. |
+| `GET /api/points?formula=…&x_min=…&x_max=…&x_step=…` | Solves the formula and returns the branches as JSON: `{"formula", "display", "kind", "x_range": {"min","max"}, "step", "branches": [{"label","points": [{"x","y"}, …]}, …]}`. Linear formulas return one branch, quadratic-in-`y` two ("+", "−"), function formulas one per contiguous segment. `x_min`/`x_max`/`x_step` (fractions allowed; step must be > 0 and ≤ 1000; both range bounds required together) override the default range and sampling — e.g. `x_step=0.1` for a smooth trig curve. Invalid formulas (or no real points) return `400` with a human-readable `detail`. |
 | `GET /health` | Liveness probe: `{"status": "ok", "app": "xy-graph-gen"}` |
 
 ## Supported input
@@ -69,6 +69,9 @@ Any linear equation, and simple polynomials in `x` (linear in `y`):
   solved via the quadratic formula into one or two branches).
 - Quadratic-in-`y` formulas get an auto x-range covering the real domain; pass
   `x_min`/`x_max` explicitly (URL or API) to control it.
+- `x_step` accepts **fractions** (`0.1`, `0.5`) up to 1000 — handy for smooth
+  trig curves. Function formulas auto-sample at a "nice" step (~400 points)
+  so `sin`, `tan`, etc. render smoothly without a manual step.
 - Formulas containing **functions, parentheses or `e`/`pi`** are solved as
   `y = f(x)` by an expression solver: `sin cos tan log ln sqrt exp abs`,
   constants `e` and `pi`, operators `+ - * / ^` (implicit `2x`, `2sin(x)`),

@@ -164,6 +164,17 @@
     <button class="chip" type="button">y = e^x</button>
   </div>
 
+  <div class="chips" id="chipsPolar" style="display:none">
+    <button class="chip" type="button">r = 2θ</button>
+    <button class="chip" type="button">r = 2/θ</button>
+    <button class="chip" type="button">r = cos(2θ)</button>
+    <button class="chip" type="button">r = 1 + cos(θ)</button>
+    <button class="chip" type="button">r = 2 + sin(3θ)</button>
+    <button class="chip" type="button">r = e^(θ/10)</button>
+    <button class="chip" type="button">r = sqrt(θ)</button>
+    <button class="chip" type="button">r = sin(θ)</button>
+  </div>
+
   <div class="chips" id="history" style="display:none"></div>
 
   <p id="solved"></p>
@@ -1144,6 +1155,9 @@ function applyModeUI() {
   document.querySelectorAll('#formulaRows .formula-input').forEach(function (inp) {
     inp.placeholder = polar ? 'e.g. r = 2\u03b8' : 'e.g. y = sin(x)';
   });
+  // The example chips are mode-specific: r = f(θ) in polar, y = f(x) in cartesian.
+  document.getElementById('chips').style.display = polar ? 'none' : '';
+  document.getElementById('chipsPolar').style.display = polar ? '' : 'none';
 }
 
 function currentModeFromUrl() {
@@ -1546,7 +1560,7 @@ function init() {
   cv.addEventListener('wheel', canvasWheel, { passive: false });
   cv.addEventListener('dblclick', canvasDblClick);
 
-  document.querySelectorAll('#chips .chip').forEach(function (ch) {
+  document.querySelectorAll('#chips .chip, #chipsPolar .chip').forEach(function (ch) {
     ch.addEventListener('click', function () { activeFormulaField().value = ch.textContent; plot(); });
   });
 

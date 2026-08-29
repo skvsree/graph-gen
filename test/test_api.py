@@ -114,6 +114,43 @@ def test_api_points_invalid_formula_returns_400():
     assert "no effective y term" in r.json()["detail"]
 
 
+def test_api_points_function_sin():
+    r = client.get("/api/points", params={"formula": "y = sin(x)"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["kind"] == "function"
+    assert body["display"] == "y = sin(x)"
+    assert body["x_range"] == {"min": 1, "max": 100}
+    assert len(body["branches"]) == 1
+    pts = body["branches"][0]["points"]
+    assert len(pts) == 100
+    assert abs(pts[0]["y"] - 0.8414709848078965) < 1e-9
+
+
+def test_api_points_function_domain_skips():
+    r = client.get("/api/points", params={"formula": "y = log(x)", "x_min": -5, "x_max": 5})
+    assert r.status_code == 200
+    body = r.json()
+    assert [p["x"] for p in body["branches"][0]["points"]] == [1, 2, 3, 4, 5]
+
+
+def test_api_points_function_segments():
+    # 1/(x-5) is undefined at x=5 → two segments
+    r = client.get("/api/points", params={"formula": "y = 1/(x-5)", "x_min": 1, "x_max": 10})
+    assert r.status_code == 200
+    body = r.json()
+    assert [len(br["points"]) for br in body["branches"]] == [4, 5]
+
+
+def test_api_points_function_invalid_returns_400():
+    r = client.get("/api/points", params={"formula": "y = sin(y)"})
+    assert r.status_code == 400
+    assert "inside a function" in r.json()["detail"]
+    r = client.get("/api/points", params={"formula": "y = foo(x)"})
+    assert r.status_code == 400
+    assert "Unknown function" in r.json()["detail"]
+
+
 def test_api_points_no_real_points_returns_400():
     r = client.get("/api/points", params={"formula": "y^2 = -1"})
     assert r.status_code == 400

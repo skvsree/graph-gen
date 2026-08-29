@@ -14,7 +14,7 @@ from fastapi.templating import Jinja2Templates
 
 from . import solver
 
-app = FastAPI(title="xy-graph-gen", version="0.3.0")
+app = FastAPI(title="xy-graph-gen", version="0.4.0")
 
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 

@@ -28,6 +28,12 @@ UNBOUNDED_WINDOW = 200      # span for one-sided unbounded domains
 UNBOUNDED_FALLBACK = 100    # symmetric default for fully unbounded domains
 MAX_POINTS_PER_BRANCH = 5000  # explicit ranges are capped at this many points
 
+FUNCTIONS = {"sin", "cos", "tan", "log", "ln", "sqrt", "exp", "abs"}
+_FUNC_RE = re.compile(
+    r"[()]|(?:sin|cos|tan|log|ln|sqrt|exp|abs)\(|(?<![a-zA-Z])e(?![a-zA-Z])|pi"
+)
+FUNCTION_Y_LIMIT = 1e6  # |y| beyond this is treated as an asymptote blow-up (tan, 1/x)
+
 
 class SolverError(ValueError):
     """Raised for formulas that cannot be solved or plotted."""
@@ -136,16 +142,23 @@ def _poly_str(poly: dict[int, float]) -> str:
 def solve_equation(raw: str) -> dict:
     """Solve ``raw`` for y.
 
-    Returns ``{"kind": "linear"|"quadratic", "a", "b", "poly", "display"}``
-    where ``a·y² + b·y = R(x)`` with ``R = poly``. Linear solutions keep the
-    legacy ``denom`` field (== b). Raises :class:`SolverError` with a
-    human-readable message for anything unsupported.
+    Returns ``{"kind": "linear"|"quadratic"|"function", ...}``.
+
+    - Polynomial formulas keep the existing behaviour: linear in ``y``
+      (e.g. ``"x + y = 3"`` -> ``y = -x + 3``) or quadratic in ``y``
+      (circles etc.), via :func:`_solve_polynomial`.
+    - Formulas containing parentheses, function calls (``sin``, ``cos``,
+      ``tan``, ``log``/``ln``, ``sqrt``, ``exp``, ``abs``) or the
+      constants ``e``/``pi`` go through the expression path
+      :func:`_solve_functional`, which solves any equation that is
+      linear in ``y`` symbolically: ``y = f(x)``, ``2y = sin(x)``,
+      ``y*sin(x) = 1``, ``(x+1)^2 + y = 3``, ``y = e^x`` … Raises
+      :class:`SolverError` with a human-readable message for anything
+      unsupported.
     """
     s = str(raw).replace(" ", "").replace("\u2212", "-")
     if not s:
         raise SolverError("Enter a formula first.")
-    if "(" in s or ")" in s:
-        raise SolverError("Parentheses are not supported yet.")
 
     eq = s.find("=")
     if eq == -1:
@@ -156,6 +169,19 @@ def solve_equation(raw: str) -> dict:
         lhs_str, rhs_str = s[:eq], s[eq + 1 :]
     if not lhs_str or not rhs_str:
         raise SolverError('Both sides of "=" must have content.')
+
+    if _FUNC_RE.search(s):
+        sol = _solve_functional(lhs_str, rhs_str)
+        if sol is not None:
+            return sol
+    return _solve_polynomial(lhs_str, rhs_str)
+
+
+def _solve_polynomial(lhs_str: str, rhs_str: str) -> dict:
+    """Legacy term-based solver (linear/quadratic in y)."""
+    s = lhs_str + "=" + rhs_str
+    if "(" in s or ")" in s:
+        raise SolverError("Parentheses are not supported yet.")
 
     lhs = parse_side(lhs_str)
     rhs = parse_side(rhs_str)
@@ -211,8 +237,457 @@ def solve_equation(raw: str) -> dict:
     return {"kind": "linear", "a": 0.0, "b": b, "denom": b, "poly": poly, "display": display}
 
 
+# ============================================================================
+# Expression path: y = f(x) with parentheses, functions, e/pi constants.
+# AST node shapes (tuples): ("num", v) ("sym", "e"|"pi") ("x",) ("y",)
+#   ("neg", n) ("func", name, n) ("bin", op, l, r) ("pow", l, r)
+# ============================================================================
+
+class _NonLinearY(Exception):
+    """Internal: the expression is not linear in y — fall back to polynomial."""
+
+
+def _expr_value_end(tok: tuple) -> bool:
+    return tok[0] == "num" or (tok[0] == "name" and tok[1] in ("x", "y")) or tok == ("op", ")")
+
+
+def _expr_value_start(tok: tuple) -> bool:
+    return tok[0] == "num" or tok[0] == "name" or tok == ("op", "(")
+
+
+def expr_tokenize(s: str) -> list:
+    """Tokenize an expression, inserting implicit ``*`` (``2x`` -> ``2*x``).
+
+    Returns a list of ``("num", v) | ("name", n) | ("op", c)`` tokens.
+    """
+    tokens = []
+    i, n = 0, len(s)
+    while i < n:
+        c = s[i]
+        if c.isspace():
+            i += 1
+            continue
+        if c.isdigit() or c == ".":
+            j = i
+            while j < n and (s[j].isdigit() or s[j] == "."):
+                j += 1
+            try:
+                v = float(s[i:j])
+            except ValueError:
+                raise SolverError(f'Cannot understand "{s[i:j]}".') from None
+            tokens.append(("num", v))
+            i = j
+            continue
+        if c.isalpha():
+            j = i
+            while j < n and s[j].isalpha():
+                j += 1
+            tokens.append(("name", s[i:j]))
+            i = j
+            continue
+        if c in "+-*/^()":
+            tokens.append(("op", c))
+            i += 1
+            continue
+        raise SolverError(f'Cannot understand character "{c}".')
+    out = []
+    for idx, tok in enumerate(tokens):
+        out.append(tok)
+        if idx < len(tokens) - 1 and _expr_value_end(tok) and _expr_value_start(tokens[idx + 1]):
+            out.append(("op", "*"))
+    return out
+
+
+class _ExprParser:
+    """Recursive-descent: expr := term (('+'|'-') term)* ; term := unary
+    (('*'|'/') unary)* ; unary := ('+'|'-') unary | power ;
+    power := primary ('^' unary)?  (so ``-x^2`` == ``-(x^2)``)."""
+
+    def __init__(self, tokens: list):
+        self.tokens = tokens
+        self.pos = 0
+
+    def peek(self) -> tuple | None:
+        return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+    def _next(self) -> tuple | None:
+        t = self.peek()
+        self.pos += 1
+        return t
+
+    def expr(self):
+        node = self.term()
+        while True:
+            t = self.peek()
+            if t in (("op", "+"), ("op", "-")):
+                self._next()
+                node = ("bin", t[1], node, self.term())
+            else:
+                return node
+
+    def term(self):
+        node = self.unary()
+        while True:
+            t = self.peek()
+            if t in (("op", "*"), ("op", "/")):
+                self._next()
+                node = ("bin", t[1], node, self.unary())
+            else:
+                return node
+
+    def unary(self):
+        t = self.peek()
+        if t == ("op", "+"):
+            self._next()
+            return self.unary()
+        if t == ("op", "-"):
+            self._next()
+            return ("neg", self.unary())
+        return self.power()
+
+    def power(self):
+        base = self.primary()
+        if self.peek() == ("op", "^"):
+            self._next()
+            return ("pow", base, self.unary())
+        return base
+
+    def primary(self):
+        t = self._next()
+        if t is None:
+            raise SolverError("Unexpected end of formula.")
+        if t[0] == "num":
+            return ("num", t[1])
+        if t[0] == "name":
+            if t[1] == "x":
+                return ("x",)
+            if t[1] == "y":
+                return ("y",)
+            if self.peek() == ("op", "("):
+                self._next()
+                inner = self.expr()
+                if self._next() != ("op", ")"):
+                    raise SolverError("Missing closing parenthesis.")
+                name = "log" if t[1] == "ln" else t[1]
+                if name not in FUNCTIONS:
+                    raise SolverError(f"Unknown function '{t[1]}'.")
+                return ("func", name, inner)
+            if t[1] in ("e", "pi"):
+                return ("sym", t[1])
+            raise SolverError(f"Unknown symbol '{t[1]}'.")
+        if t == ("op", "("):
+            inner = self.expr()
+            if self._next() != ("op", ")"):
+                raise SolverError("Missing closing parenthesis.")
+            return inner
+        raise SolverError(f'Unexpected "{t[1]}".')
+
+
+def parse_expr(s: str) -> tuple:
+    return _ExprParser(expr_tokenize(s)).expr()
+
+
+def _linearize(node) -> tuple:
+    """Return ``(a, b)`` with ``node ≡ a·y + b``; ``a is None`` = no y term.
+
+    Raises :class:`_NonLinearY` when y appears squared, in a denominator,
+    in an exponent, or under a function — callers fall back to the
+    polynomial path in that case.
+    """
+    t = node[0]
+    if t in ("num", "sym", "x"):
+        return None, node
+    if t == "y":
+        return ("num", 1.0), ("num", 0.0)
+    if t == "neg":
+        a, b = _linearize(node[1])
+        return (None if a is None else ("neg", a), ("neg", b))
+    if t == "func":
+        a, b = _linearize(node[2])
+        if a is not None:
+            raise SolverError("Cannot solve — 'y' appears inside a function.")
+        return None, ("func", node[1], b)
+    if t == "pow":
+        al, _bl = _linearize(node[1])
+        ar, _br = _linearize(node[2])
+        if al is not None or ar is not None:
+            raise _NonLinearY()
+        return None, ("pow", node[1], node[2])
+    if t == "bin":
+        op = node[1]
+        al, bl = _linearize(node[2])
+        ar, br = _linearize(node[3])
+        if op == "+":
+            return (_add_a(al, ar), ("bin", "+", bl, br))
+        if op == "-":
+            return (_sub_a(al, ar), ("bin", "-", bl, br))
+        if op == "*":
+            if al is not None and ar is not None:
+                raise _NonLinearY()
+            if al is not None:
+                return (("bin", "*", al, br), ("bin", "*", bl, br))
+            if ar is not None:
+                return (("bin", "*", bl, ar), ("bin", "*", bl, br))
+            return (None, ("bin", "*", bl, br))
+        if op == "/":
+            if ar is not None:
+                raise _NonLinearY()
+            if al is not None:
+                return (("bin", "/", al, br), ("bin", "/", bl, br))
+            return (None, ("bin", "/", bl, br))
+    raise SolverError("Internal solver error.")
+
+
+def _add_a(a, b):
+    if a is None and b is None:
+        return None
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return ("bin", "+", a, b)
+
+
+def _sub_a(a, b):
+    if a is None and b is None:
+        return None
+    if a is None:
+        return ("neg", b)
+    if b is None:
+        return a
+    return ("bin", "-", a, b)
+
+
+def _simplify(node) -> tuple:
+    """Constant folding + identity elimination (x*1, x+0, 0*x, ...)."""
+    t = node[0]
+    if t in ("num", "sym", "x", "y"):
+        return node
+    if t == "neg":
+        c = _simplify(node[1])
+        if c[0] == "num":
+            return ("num", -c[1])
+        if c[0] == "neg":
+            return c[1]
+        return ("neg", c)
+    if t == "func":
+        return ("func", node[1], _simplify(node[2]))
+    if t == "pow":
+        l = _simplify(node[1])
+        r = _simplify(node[2])
+        if l[0] == "num" and r[0] == "num":
+            try:
+                return ("num", l[1] ** r[1])
+            except (ValueError, ZeroDivisionError, OverflowError):
+                return ("pow", l, r)
+        if r[0] == "num":
+            if r[1] == 1:
+                return l
+            if r[1] == 0:
+                return ("num", 1.0)
+        return ("pow", l, r)
+    op = node[1]
+    l = _simplify(node[2])
+    r = _simplify(node[3])
+    if op == "+":
+        if l[0] == "num" and l[1] == 0:
+            return r
+        if r[0] == "num" and r[1] == 0:
+            return l
+        if l[0] == "num" and r[0] == "num":
+            return ("num", l[1] + r[1])
+        return ("bin", "+", l, r)
+    if op == "-":
+        if r[0] == "num" and r[1] == 0:
+            return l
+        if l[0] == "num" and r[0] == "num":
+            return ("num", l[1] - r[1])
+        return ("bin", "-", l, r)
+    if op == "*":
+        if l[0] == "num" and l[1] == 0:
+            return ("num", 0.0)
+        if r[0] == "num" and r[1] == 0:
+            return ("num", 0.0)
+        if l[0] == "num" and l[1] == 1:
+            return r
+        if r[0] == "num" and r[1] == 1:
+            return l
+        if l[0] == "num" and r[0] == "num":
+            return ("num", l[1] * r[1])
+        if l[0] == "num" and l[1] == -1:
+            return ("neg", r)
+        if r[0] == "num" and r[1] == -1:
+            return ("neg", l)
+        return ("bin", "*", l, r)
+    if op == "/":
+        if l[0] == "num" and l[1] == 0:
+            return ("num", 0.0)
+        if r[0] == "num" and r[1] == 1:
+            return l
+        if l[0] == "num" and r[0] == "num":
+            try:
+                return ("num", l[1] / r[1])
+            except ZeroDivisionError:
+                return ("bin", "/", l, r)
+        return ("bin", "/", l, r)
+    return node
+
+
+def _prec(node) -> int:
+    if node[0] in ("num", "sym", "x", "y", "func"):
+        return 4
+    if node[0] in ("neg", "pow"):
+        return 3
+    if node[0] == "bin":
+        return 2 if node[1] in "*/" else 1
+    return 0
+
+
+def _ast_str(node) -> str:
+    """Render an AST back to a compact expression (uses U+2212 minus)."""
+    t = node[0]
+    if t == "num":
+        return fmt(node[1])
+    if t == "sym":
+        return node[1]
+    if t == "x":
+        return "x"
+    if t == "func":
+        return node[1] + "(" + _ast_str(node[2]) + ")"
+    if t == "neg":
+        inner = _ast_str(node[1])
+        if node[1][0] in ("bin", "neg"):
+            inner = "(" + inner + ")"
+        return "\u2212" + inner
+    if t == "pow":
+        bs = _ast_str(node[1])
+        if node[1][0] in ("bin", "neg"):
+            bs = "(" + bs + ")"
+        es = _ast_str(node[2])
+        if node[2][0] in ("bin", "neg", "pow"):
+            es = "(" + es + ")"
+        return bs + "^" + es
+    op, l, r = node[1], node[2], node[3]
+    ls, rs = _ast_str(l), _ast_str(r)
+    if op in ("+", "-"):
+        if _prec(l) < 1:
+            ls = "(" + ls + ")"
+        if _prec(r) < 1 or r[0] == "neg":
+            rs = "(" + rs + ")"
+        return ls + (" + " if op == "+" else " \u2212 ") + rs
+    if op == "*":
+        if _prec(l) < 2:
+            ls = "(" + ls + ")"
+        if _prec(r) < 2:
+            rs = "(" + rs + ")"
+        if r[0] in ("num", "sym") or l[0] in ("x", "y", "sym"):
+            return ls + " * " + rs
+        return ls + rs  # "2x", "2sin(x)", "sin(x)cos(x)"
+    if op == "/":
+        if _prec(l) < 2:
+            ls = "(" + ls + ")"
+        if _prec(r) < 2:
+            rs = "(" + rs + ")"
+        return ls + " / " + rs
+    return node  # pragma: no cover
+
+
+def _solve_functional(lhs_str: str, rhs_str: str) -> dict | None:
+    """Solve an equation linear in y as ``y = (B_r − B_l)/(A_l − A_r)``.
+
+    Returns the solution dict, or ``None`` when the formula is not linear
+    in y (caller falls back to the polynomial path so legacy error
+    messages survive).
+    """
+    try:
+        la, lb = _linearize(parse_expr(lhs_str))
+        ra, rb = _linearize(parse_expr(rhs_str))
+    except _NonLinearY:
+        return None
+
+    a_tot = _simplify(_sub_a(la, ra))  # y coefficient
+    expr = _simplify(("bin", "-", rb, lb))  # R(x): b_r − b_l
+    if a_tot is None or (a_tot[0] == "num" and a_tot[1] == 0):
+        raise SolverError("Equation has no effective y term — cannot solve for y.")
+    if a_tot[0] == "num" and a_tot[1] < 0:
+        a_tot = ("num", -a_tot[1])
+        expr = ("neg", expr)
+    elif a_tot[0] == "neg" and a_tot[1][0] == "num":
+        a_tot = ("num", -a_tot[1][1])
+        expr = ("neg", expr)
+
+    e_str = _ast_str(expr)
+    if a_tot == ("num", 1.0):
+        display = "y = " + e_str
+    else:
+        b_str = _ast_str(a_tot)
+        body = f"({e_str})" if expr[0] == "bin" else e_str
+        display = f"y = {body} / {b_str}"
+    return {"kind": "function", "expr": expr, "b": a_tot, "display": display}
+
+
+def eval_ast(node, x: float) -> float:
+    """Numerically evaluate an x-only AST at ``x``."""
+    t = node[0]
+    if t == "num":
+        return node[1]
+    if t == "sym":
+        return math.e if node[1] == "e" else math.pi
+    if t == "x":
+        return x
+    if t == "y":
+        raise SolverError("Internal solver error: y leaked into eval.")
+    if t == "neg":
+        return -eval_ast(node[1], x)
+    if t == "func":
+        v = eval_ast(node[2], x)
+        f = node[1]
+        if f == "sin":
+            return math.sin(v)
+        if f == "cos":
+            return math.cos(v)
+        if f == "tan":
+            return math.tan(v)
+        if f == "log":
+            return math.log(v)
+        if f == "sqrt":
+            return math.sqrt(v)
+        if f == "exp":
+            return math.exp(v)
+        if f == "abs":
+            return abs(v)
+        raise SolverError(f"Internal solver error: unknown function {f}.")  # pragma: no cover
+    if t == "bin":
+        l, r = eval_ast(node[2], x), eval_ast(node[3], x)
+        op = node[1]
+        if op == "+":
+            return l + r
+        if op == "-":
+            return l - r
+        if op == "*":
+            return l * r
+        if op == "/":
+            return l / r
+    if t == "pow":
+        return eval_ast(node[1], x) ** eval_ast(node[2], x)
+    raise SolverError("Internal solver error.")  # pragma: no cover
+
+
 def eval_poly(poly: dict[int, float], x: float) -> float:
     return sum(c * (x**e) for e, c in poly.items())
+
+
+def _eval_function(sol: dict, x: float) -> float | None:
+    """Evaluate ``y = f(x)`` at ``x``; None when the value is not plottable."""
+    try:
+        num = eval_ast(sol["expr"], x)
+        den = eval_ast(sol["b"], x)
+        y = num / den
+    except (ValueError, ZeroDivisionError, OverflowError):
+        return None
+    if not math.isfinite(y) or abs(y) > FUNCTION_Y_LIMIT:
+        return None
+    return y
 
 
 def _discriminant(sol: dict, x: float) -> float:
@@ -321,6 +796,26 @@ def generate_points(
         if not points:
             raise SolverError("No real y for the given x range.")
         branches = [{"label": "", "points": points}]
+    elif sol["kind"] == "function":
+        # y = f(x): skip points outside the domain (log/sqrt of negatives,
+        # division by zero) and asymptote blow-ups; each contiguous run of
+        # valid points becomes its own branch/segment so the polyline does
+        # not jump across a vertical asymptote.
+        segments = []
+        cur = []
+        for x in range(lo, hi + 1, step):
+            y = _eval_function(sol, x)
+            if y is None:
+                if cur:
+                    segments.append(cur)
+                    cur = []
+                continue
+            cur.append((x, y))
+        if cur:
+            segments.append(cur)
+        if not segments:
+            raise SolverError("No real y for the given x range.")
+        branches = [{"label": "", "points": seg} for seg in segments]
     else:
         plus, minus = [], []
         for x in range(lo, hi + 1, step):

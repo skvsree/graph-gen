@@ -9,6 +9,17 @@ ellipses, sideways parabolas, hyperbolas) plot **two branches** and
 auto-derive an x range that covers their real domain (e.g. `x^2 + y^2 = 100`
 plots x = -10…10). Pass explicit `x_min`/`x_max` to override.
 
+Function formulas — `y = sin(x)`, `y = e^x`, `y = 1/(x-5)` — plot through a
+small expression solver supporting `sin cos tan log sqrt exp abs`, the
+constants `e` and `pi`, parentheses and `+ - * / ^`. Domain holes and
+vertical asymptotes are skipped (the polyline breaks across an asymptote),
+so `tan` and reciprocal functions render cleanly.
+
+The graph is interactive: **drag to pan, scroll to zoom, double-click to
+reset**. A theme toggle (dark/light, persisted) and a grid on/off toggle sit
+next to the plot button, and every successful plot is remembered in a
+localStorage history row (last 12, click a chip to re-plot, ✕ clear).
+
 FastAPI + Jinja2 + vanilla JS. The page plots from the server-side solver
 (`/api/points`) and falls back to a built-in client-side solver if the API is
 unreachable (e.g. opened as a plain file).
@@ -29,7 +40,7 @@ Open http://127.0.0.1:8123
 | Endpoint | Description |
 |---|---|
 | `GET /` | Renders the graph page. The formula is a query param: `/?formula=x%20%2B%20y%20%3D%203`. The page keeps the URL in sync (`?formula=…`) as you plot, so links are shareable. |
-| `GET /api/points?formula=…&x_min=…&x_max=…&x_step=…` | Solves the formula and returns the branches as JSON: `{"formula", "display", "kind", "x_range": {"min","max"}, "step", "branches": [{"label","points": [{"x","y"}, …]}, …]}`. Linear formulas return one branch, quadratic-in-`y` two ("+", "−"). `x_min`/`x_max`/`x_step` (1–1000, both range bounds required together) override the default range and sampling. Invalid formulas (or no real points) return `400` with a human-readable `detail`. |
+| `GET /api/points?formula=…&x_min=…&x_max=…&x_step=…` | Solves the formula and returns the branches as JSON: `{"formula", "display", "kind", "x_range": {"min","max"}, "step", "branches": [{"label","points": [{"x","y"}, …]}, …]}`. Linear formulas return one branch, quadratic-in-`y` two ("+", "−"), function formulas one per contiguous segment. `x_min`/`x_max`/`x_step` (1–1000, both range bounds required together) override the default range and sampling. Invalid formulas (or no real points) return `400` with a human-readable `detail`. |
 | `GET /health` | Liveness probe: `{"status": "ok", "app": "xy-graph-gen"}` |
 
 ## Supported input
@@ -45,6 +56,12 @@ Any linear equation, and simple polynomials in `x` (linear in `y`):
 | `x^2 + y^2 = 100` | `y = ±√(−x^2 + 100)` — two branches, x = −10…10 |
 | `y^2 = 4x`        | `y = ±√(4x)` — two branches, x = 0…200 |
 | `y^2 + y = x`     | `y = (−1 ± √(1 + 4x)) / 2` — general quadratic in y |
+| `y = sin(x)`      | `y = sin(x)` — function branch, x = 1…100 |
+| `y = e^x`         | `y = e^x` — `e` is Euler's number |
+| `y = 1/(x-5)`     | `y = 1 / (x − 5)` — x=5 skipped, two segments |
+| `2y = sin(x)`     | `y = sin(x) / 2` — any equation linear in y |
+| `sin(x) + y = 3`  | `y = 3 − sin(x)` |
+| `y = (x+1)^2`     | `y = (x + 1)^2` — parentheses work in function form |
 
 - A bare expression without `=` is treated as `y = <expr>`.
 - Terms like `2x`, `-3y`, `x^2`, decimals (`1.5x`) are supported.
@@ -52,7 +69,15 @@ Any linear equation, and simple polynomials in `x` (linear in `y`):
   solved via the quadratic formula into one or two branches).
 - Quadratic-in-`y` formulas get an auto x-range covering the real domain; pass
   `x_min`/`x_max` explicitly (URL or API) to control it.
-- Parentheses are not supported.
+- Formulas containing **functions, parentheses or `e`/`pi`** are solved as
+  `y = f(x)` by an expression solver: `sin cos tan log ln sqrt exp abs`,
+  constants `e` and `pi`, operators `+ - * / ^` (implicit `2x`, `2sin(x)`),
+  and any equation linear in `y` (`2y = sin(x)`, `y*sin(x) = 1`). `log` is
+  the natural logarithm. Points outside a function's domain are skipped.
+- Everything else (plain polynomials) uses the term solver, which still
+  rejects parentheses — parenthesised formulas that are not linear in `y`
+  (e.g. `(x+1)^2 + y^2 = 100`) error with "Parentheses are not supported
+  yet."
 
 ## Project layout
 
@@ -110,14 +135,14 @@ P3 = bigger / probably not worth it.
 - [ ] GitHub Actions CI (pytest + node tests on push) — workflow written & tested locally, but push is **blocked**: the PAT needs `Workflows: Read and write` scope
 
 ### P2 — capability upgrades
-- [ ] General functions: `sin`, `cos`, `tan`, `log`, `sqrt`, `exp`, `abs` (real grapher territory)
+- [x] General functions: `sin`, `cos`, `tan`, `log`, `sqrt`, `exp`, `abs` (real grapher territory)
 - [ ] Multiple formulas on one graph with legend (batch `/api/points` or comma-separated input)
 - [ ] Derivative + tangent lines (symbolic for polynomials — cheap: differentiate the coefficient map)
 - [ ] Intersection points between curves (solve linear/quadratic pairs symbolically)
-- [ ] Zoom & pan on the canvas (drag to pan, wheel to zoom)
-- [ ] Formula history (localStorage ring buffer, shown as chips)
+- [x] Zoom & pan on the canvas (drag to pan, wheel to zoom)
+- [x] Formula history (localStorage ring buffer, shown as chips)
 - [ ] Points CSV export
-- [ ] Dark mode / grid toggle
+- [x] Dark mode / grid toggle
 
 ### P3 — bigger / probably not
 - [ ] General implicit curves (grid sampling / contour rendering — different plotter)

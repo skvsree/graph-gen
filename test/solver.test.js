@@ -13,9 +13,9 @@ const sandbox = { console, Math, Number, String, Object, Set, isFinite, parseInt
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 // The guard `typeof document !== 'undefined'` prevents DOM code from running here.
-vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches };', sandbox);
+vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches, evalAst: evalAst, astStr: astStr };', sandbox);
 
-const { solveEquation, evalPoly, fmt, parseTerm, buildBranches } = sandbox.__api;
+const { solveEquation, evalPoly, fmt, parseTerm, buildBranches, evalAst, astStr } = sandbox.__api;
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -63,7 +63,7 @@ check('fractional coeff', solveEquation('0.5x + y = 2').display, 'y = \u22120.5x
 // --- error cases
 checkErr('no y term', 'x = 5', 'no effective y term');
 checkErr('two equals signs', 'x + y = 3 = 4', 'Only one "="');
-checkErr('parentheses', 'y = (x)', 'Parentheses');
+checkErr('parens not linear in y', '(x+1)^2 + y^2 = 100', 'Parentheses');
 checkErr('y cubed', 'y^3 = x', 'linear or quadratic in y');
 checkErr('empty rhs', 'x = ', 'Both sides');
 checkErr('empty lhs', '= 3', 'Both sides');
@@ -113,4 +113,55 @@ checkErr('empty input', '   ', 'Enter a formula');
 }
 
 console.log(failures === 0 ? '\nALL TESTS PASSED' : '\n' + failures + ' TEST(S) FAILED');
+
+// --- functions (P2-1): y = f(x) expression path ---
+{
+  const sol = solveEquation('y = sin(x)');
+  check('sin solves', sol.kind, 'function');
+  check('sin display', sol.display, 'y = sin(x)');
+  const b = buildBranches(sol, 1, 5);
+  check('sin 5 pts', b.branches[0].points.length, 5);
+  check('sin y(1)', Math.abs(b.branches[0].points[0].y - Math.sin(1)) < 1e-9, true);
+}
+check('2y=sin(x)', solveEquation('2y = sin(x)').display, 'y = sin(x) / 2');
+check('-2y=sin(x)', solveEquation('-2y = sin(x)').display, 'y = \u2212sin(x) / 2');
+check('sin(x)+y=3', solveEquation('sin(x) + y = 3').display, 'y = 3 \u2212 sin(x)');
+check('y=x+sin(x)', solveEquation('y = x + sin(x)').display, 'y = x + sin(x)');
+check('y*sin(x)=1', solveEquation('y*sin(x) = 1').display, 'y = 1 / sin(x)');
+check('e^x', solveEquation('y = e^x').display, 'y = e^x');
+check('pi*x', solveEquation('y = pi*x').display, 'y = pi * x');
+check('(x+1)^2', solveEquation('y = (x+1)^2').display, 'y = (x + 1)^2');
+check('2(x+1)', solveEquation('y = 2(x+1)').display, 'y = 2(x + 1)');
+check('(x) solves', solveEquation('y = (x)').display, 'y = x');
+check('ln alias', solveEquation('y = ln(x)').display, 'y = log(x)');
+check('sqrt display', solveEquation('y = sqrt(x)').display, 'y = sqrt(x)');
+check('abs display', solveEquation('y = abs(x)').display, 'y = abs(x)');
+check('tan display', solveEquation('y = tan(x)').display, 'y = tan(x)');
+{
+  const b = buildBranches(solveEquation('y = log(x)'), -5, 5);
+  check('log domain skips', b.branches[0].points.map(p => p.x), [1, 2, 3, 4, 5]);
+}
+{
+  const b = buildBranches(solveEquation('y = sqrt(x)'), -10, 10);
+  check('sqrt domain skips', b.branches[0].points.map(p => p.x), Array.from({ length: 11 }, (_, i) => i));
+}
+{
+  const b = buildBranches(solveEquation('y = 1/(x-5)'), 1, 10);
+  check('1/(x-5) segments', b.branches.map(br => br.points.length), [4, 5]);
+}
+{
+  const b = buildBranches(solveEquation('y = sin(x)'), 1, 10, 2);
+  check('function step respected', b.branches[0].points.map(p => p.x), [1, 3, 5, 7, 9]);
+}
+checkErr('y in function', 'y = sin(y)', 'y\' appears inside a function');
+checkErr('unknown function', 'y = foo(x)', 'Unknown function');
+checkErr('unknown symbol', 'y = (bar)', 'Unknown symbol');
+checkErr('parse garbage', 'y = (2 + * 3)', 'Unexpected');
+checkErr('unclosed paren', 'y = sin(x+', 'Unexpected end of formula');
+checkErr('y cancels out', 'y + sin(x) = y + 2', 'no effective y term');
+{
+  const b = buildBranches(solveEquation('y = sqrt(x)'), -10, -1);
+  check('sqrt no real y', b.error || '', 'No real y for the given x range.');
+}
+
 process.exit(failures === 0 ? 0 : 1);

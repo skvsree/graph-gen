@@ -160,7 +160,7 @@ def test_quadratic_no_real_points_in_explicit_range():
     [
         ("x = 5", "no effective y term"),
         ("x + y = 3 = 4", 'Only one "="'),
-        ("y = (x)", "Parentheses"),
+        ("(x+1)^2 + y^2 = 100", "Parentheses"),  # parens only work in y = f(x) form
         ("y^3 = x", "linear or quadratic in y"),
         ("x = ", "Both sides"),
         ("= 3", "Both sides"),
@@ -229,3 +229,103 @@ def test_fmt():
     assert solver.fmt(0.5) == "0.5"
     assert solver.fmt(-0.0) == "0"
     assert solver.fmt(1.3333333333333333) == "1.33333333333"
+
+
+# --- functions (P2-1): y = f(x) expression path ---
+@pytest.mark.parametrize(
+    "raw,display",
+    [
+        ("y = sin(x)", "y = sin(x)"),
+        ("y = cos(x)", "y = cos(x)"),
+        ("y = tan(x)", "y = tan(x)"),
+        ("y = log(x)", "y = log(x)"),
+        ("y = ln(x)", "y = log(x)"),  # ln is an alias for log
+        ("y = sqrt(x)", "y = sqrt(x)"),
+        ("y = exp(x)", "y = exp(x)"),
+        ("y = abs(x)", "y = abs(x)"),
+        ("2y = sin(x)", "y = sin(x) / 2"),
+        ("-2y = sin(x)", "y = \u2212sin(x) / 2"),
+        ("sin(x) + y = 3", "y = 3 \u2212 sin(x)"),
+        ("y = x + sin(x)", "y = x + sin(x)"),
+        ("y*sin(x) = 1", "y = 1 / sin(x)"),
+        ("y = e^x", "y = e^x"),
+        ("y = pi*x", "y = pi * x"),
+        ("y = (x+1)^2", "y = (x + 1)^2"),
+        ("y = 2(x+1)", "y = 2(x + 1)"),
+        ("y = (x)", "y = x"),
+        ("y = 1/(x-5)", "y = 1 / (x \u2212 5)"),
+    ],
+)
+def test_function_display(raw, display):
+    sol = solver.solve_equation(raw)
+    assert sol["kind"] == "function"
+    assert sol["display"] == display
+
+
+def test_function_points_sin():
+    result = solver.generate_points("y = sin(x)", x_min=1, x_max=5)
+    assert result["solution"]["kind"] == "function"
+    assert result["x_range"] == (1, 5)
+    pts = result["branches"][0]["points"]
+    assert len(pts) == 5
+    assert pts[0][0] == 1
+    assert abs(pts[0][1] - math.sin(1)) < 1e-9
+
+
+def test_function_auto_range_is_1_100():
+    result = solver.generate_points("y = sin(x)")
+    assert result["x_range"] == (1, 100)
+    assert len(result["branches"][0]["points"]) == 100
+
+
+def test_function_log_domain_skips_non_positive():
+    result = solver.generate_points("y = log(x)", x_min=-5, x_max=5)
+    assert [x for x, _ in result["branches"][0]["points"]] == [1, 2, 3, 4, 5]
+
+
+def test_function_sqrt_domain_skips_negative():
+    result = solver.generate_points("y = sqrt(x)", x_min=-10, x_max=10)
+    assert [x for x, _ in result["branches"][0]["points"]] == list(range(0, 11))
+
+
+def test_function_division_splits_segments():
+    # 1/(x-5) is undefined at x=5 → two segments
+    result = solver.generate_points("y = 1/(x-5)", x_min=1, x_max=10)
+    assert [len(b["points"]) for b in result["branches"]] == [4, 5]
+    assert result["branches"][0]["points"][-1][0] == 4
+    assert result["branches"][1]["points"][0][0] == 6
+
+
+def test_function_no_real_points_raises():
+    with pytest.raises(solver.SolverError, match="No real y"):
+        solver.generate_points("y = sqrt(x)", x_min=-10, x_max=-1)
+    with pytest.raises(solver.SolverError, match="No real y"):
+        solver.generate_points("y = log(x)", x_min=-5, x_max=0)
+
+
+def test_function_step_respected():
+    result = solver.generate_points("y = sin(x)", x_min=1, x_max=10, x_step=2)
+    assert result["step"] == 2
+    assert [x for x, _ in result["branches"][0]["points"]] == [1, 3, 5, 7, 9]
+
+
+@pytest.mark.parametrize(
+    "raw,needle",
+    [
+        ("y = sin(y)", "y' appears inside a function"),
+        ("y = foo(x)", "Unknown function"),
+        ("y = (bar)", "Unknown symbol"),
+        ("y = (2 + * 3)", "Unexpected"),
+        ("y = sin(x+", "Unexpected end of formula"),
+        ("y + sin(x) = y + 2", "no effective y term"),
+    ],
+)
+def test_function_errors(raw, needle):
+    with pytest.raises(solver.SolverError) as exc:
+        solver.solve_equation(raw)
+    assert needle in str(exc.value)
+
+
+def test_function_range_caps_still_apply():
+    with pytest.raises(solver.SolverError, match="Range too large"):
+        solver.generate_points("y = sin(x)", x_min=1, x_max=1_000_000)

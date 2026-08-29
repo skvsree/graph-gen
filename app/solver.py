@@ -33,6 +33,7 @@ _FUNC_RE = re.compile(
     r"[()]|(?:sin|cos|tan|log|ln|sqrt|exp|abs)\(|(?<![a-zA-Z])e(?![a-zA-Z])|pi"
 )
 FUNCTION_Y_LIMIT = 1e6  # |y| beyond this is treated as an asymptote blow-up (tan, 1/x)
+DEFAULT_POLAR_MAX = 4 * math.pi  # default θ range for polar mode: two full turns
 
 
 class SolverError(ValueError):
@@ -139,22 +140,20 @@ def _poly_str(poly: dict[int, float]) -> str:
     return "".join(parts) if parts else "0"
 
 
-def solve_equation(raw: str) -> dict:
-    """Solve ``raw`` for y.
+def solve_equation(raw: str, polar: bool = False) -> dict:
+    """Solve ``raw`` for y (cartesian) or r (polar).
 
-    Returns ``{"kind": "linear"|"quadratic"|"function", ...}``.
+    Returns ``{"kind": "linear"|"quadratic"|"function"|"polar", ...}``.
 
-    - Polynomial formulas keep the existing behaviour: linear in ``y``
-      (e.g. ``"x + y = 3"`` -> ``y = -x + 3``) or quadratic in ``y``
-      (circles etc.), via :func:`_solve_polynomial`.
-    - Formulas containing parentheses, function calls (``sin``, ``cos``,
-      ``tan``, ``log``/``ln``, ``sqrt``, ``exp``, ``abs``) or the
-      constants ``e``/``pi`` go through the expression path
-      :func:`_solve_functional`, which solves any equation that is
-      linear in ``y`` symbolically: ``y = f(x)``, ``2y = sin(x)``,
-      ``y*sin(x) = 1``, ``(x+1)^2 + y = 3``, ``y = e^x`` … Raises
-      :class:`SolverError` with a human-readable message for anything
-      unsupported.
+    - Cartesian (default): as documented — polynomial formulas via
+      :func:`_solve_polynomial`, function/parenthesis formulas via
+      :func:`_solve_functional`.
+    - Polar (``polar=True``): the equation must be linear in ``r``,
+      ``r = f(θ)`` (write the angle as ``θ`` or ``theta``). Always goes
+      through the expression path; the radius variable is ``r`` (or ``y``).
+
+    Raises :class:`SolverError` with a human-readable message for anything
+    unsupported.
     """
     s = str(raw).replace(" ", "").replace("\u2212", "-")
     if not s:
@@ -170,6 +169,13 @@ def solve_equation(raw: str) -> dict:
     if not lhs_str or not rhs_str:
         raise SolverError('Both sides of "=" must have content.')
 
+    if polar:
+        sol = _solve_functional(lhs_str, rhs_str, polar=True)
+        if sol is None:
+            raise SolverError(
+                "Polar equations must be linear in r — use the form r = f(\u03b8)."
+            )
+        return sol
     if _FUNC_RE.search(s):
         sol = _solve_functional(lhs_str, rhs_str)
         if sol is not None:
@@ -301,11 +307,16 @@ def expr_tokenize(s: str) -> list:
 class _ExprParser:
     """Recursive-descent: expr := term (('+'|'-') term)* ; term := unary
     (('*'|'/') unary)* ; unary := ('+'|'-') unary | power ;
-    power := primary ('^' unary)?  (so ``-x^2`` == ``-(x^2)``)."""
+    power := primary ('^' unary)?  (so ``-x^2`` == ``-(x^2)``).
 
-    def __init__(self, tokens: list):
+    ``polar=True`` maps ``r`` to the radius variable (like ``y``) — ``θ``
+    and ``theta`` are always the angle variable.
+    """
+
+    def __init__(self, tokens: list, polar: bool = False):
         self.tokens = tokens
         self.pos = 0
+        self.polar = polar
 
     def peek(self) -> tuple | None:
         return self.tokens[self.pos] if self.pos < len(self.tokens) else None
@@ -361,8 +372,10 @@ class _ExprParser:
         if t[0] == "name":
             if t[1] == "x":
                 return ("x",)
-            if t[1] == "y":
+            if t[1] == "y" or (self.polar and t[1] == "r"):
                 return ("y",)
+            if t[1] in ("\u03b8", "theta"):
+                return ("theta",)
             if self.peek() == ("op", "("):
                 self._next()
                 inner = self.expr()
@@ -383,8 +396,8 @@ class _ExprParser:
         raise SolverError(f'Unexpected "{t[1]}".')
 
 
-def parse_expr(s: str) -> tuple:
-    return _ExprParser(expr_tokenize(s)).expr()
+def parse_expr(s: str, polar: bool = False) -> tuple:
+    return _ExprParser(expr_tokenize(s), polar=polar).expr()
 
 
 def _linearize(node) -> tuple:
@@ -395,7 +408,7 @@ def _linearize(node) -> tuple:
     polynomial path in that case.
     """
     t = node[0]
-    if t in ("num", "sym", "x"):
+    if t in ("num", "sym", "x", "theta"):
         return None, node
     if t == "y":
         return ("num", 1.0), ("num", 0.0)
@@ -461,7 +474,7 @@ def _sub_a(a, b):
 def _simplify(node) -> tuple:
     """Constant folding + identity elimination (x*1, x+0, 0*x, ...)."""
     t = node[0]
-    if t in ("num", "sym", "x", "y"):
+    if t in ("num", "sym", "x", "y", "theta"):
         return node
     if t == "neg":
         c = _simplify(node[1])
@@ -529,12 +542,15 @@ def _simplify(node) -> tuple:
                 return ("num", l[1] / r[1])
             except ZeroDivisionError:
                 return ("bin", "/", l, r)
+        if r[0] == "num" and l[0] == "bin" and l[1] == "*" and l[2][0] == "num":
+            # (a·inner) / b  →  (a/b)·inner   e.g. (4θ)/2 → 2θ
+            return _simplify(("bin", "*", ("num", l[2][1] / r[1]), l[3]))
         return ("bin", "/", l, r)
     return node
 
 
 def _prec(node) -> int:
-    if node[0] in ("num", "sym", "x", "y", "func"):
+    if node[0] in ("num", "sym", "x", "y", "theta", "func"):
         return 4
     if node[0] in ("neg", "pow"):
         return 3
@@ -552,6 +568,8 @@ def _ast_str(node) -> str:
         return node[1]
     if t == "x":
         return "x"
+    if t == "theta":
+        return "\u03b8"
     if t == "func":
         return node[1] + "(" + _ast_str(node[2]) + ")"
     if t == "neg":
@@ -592,38 +610,56 @@ def _ast_str(node) -> str:
     return node  # pragma: no cover
 
 
-def _solve_functional(lhs_str: str, rhs_str: str) -> dict | None:
-    """Solve an equation linear in y as ``y = (B_r − B_l)/(A_l − A_r)``.
+def _solve_functional(lhs_str: str, rhs_str: str, polar: bool = False) -> dict | None:
+    """Solve an equation linear in y (or r, when ``polar``) as
+    ``y = (B_r − B_l)/(A_l − A_r)``.
 
     Returns the solution dict, or ``None`` when the formula is not linear
-    in y (caller falls back to the polynomial path so legacy error
-    messages survive).
+    in the radius variable (caller falls back to the polynomial solver so
+    legacy error messages survive).
     """
     try:
-        la, lb = _linearize(parse_expr(lhs_str))
-        ra, rb = _linearize(parse_expr(rhs_str))
+        la, lb = _linearize(parse_expr(lhs_str, polar=polar))
+        ra, rb = _linearize(parse_expr(rhs_str, polar=polar))
     except _NonLinearY:
         return None
 
-    a_tot = _simplify(_sub_a(la, ra))  # y coefficient
+    a_tot = _sub_a(la, ra)  # y/r coefficient (None = no radius term at all)
     expr = _simplify(("bin", "-", rb, lb))  # R(x): b_r − b_l
-    if a_tot is None or (a_tot[0] == "num" and a_tot[1] == 0):
-        raise SolverError("Equation has no effective y term — cannot solve for y.")
+    if a_tot is None:
+        var = "r" if polar else "y"
+        raise SolverError(f"Equation has no effective {var} term — cannot solve for {var}.")
+    a_tot = _simplify(a_tot)
+    if a_tot[0] == "num" and a_tot[1] == 0:
+        var = "r" if polar else "y"
+        raise SolverError(f"Equation has no effective {var} term — cannot solve for {var}.")
     if a_tot[0] == "num" and a_tot[1] < 0:
         a_tot = ("num", -a_tot[1])
         expr = ("neg", expr)
     elif a_tot[0] == "neg" and a_tot[1][0] == "num":
         a_tot = ("num", -a_tot[1][1])
         expr = ("neg", expr)
+    # Fold a numeric coefficient into the expression when possible:
+    # 2r = 4θ  →  r = 2θ  (instead of r = (4θ) / 2); 2r = 6 → r = 3.
+    if a_tot[0] == "num" and a_tot[1] != 1:
+        c = a_tot[1]
+        if expr[0] == "num":
+            expr = ("num", expr[1] / c)
+            a_tot = ("num", 1.0)
+        elif expr[0] == "bin" and expr[1] == "*" and expr[2][0] == "num":
+            expr = _simplify(("bin", "*", ("num", expr[2][1] / c), expr[3]))
+            a_tot = ("num", 1.0)
 
+    prefix = "r = " if polar else "y = "
     e_str = _ast_str(expr)
     if a_tot == ("num", 1.0):
-        display = "y = " + e_str
+        display = prefix + e_str
     else:
         b_str = _ast_str(a_tot)
         body = f"({e_str})" if expr[0] == "bin" else e_str
-        display = f"y = {body} / {b_str}"
-    return {"kind": "function", "expr": expr, "b": a_tot, "display": display}
+        display = f"{prefix}{body} / {b_str}"
+    kind = "polar" if polar else "function"
+    return {"kind": kind, "expr": expr, "b": a_tot, "display": display}
 
 
 def eval_ast(node, x: float) -> float:
@@ -634,6 +670,8 @@ def eval_ast(node, x: float) -> float:
     if t == "sym":
         return math.e if node[1] == "e" else math.pi
     if t == "x":
+        return x
+    if t == "theta":
         return x
     if t == "y":
         raise SolverError("Internal solver error: y leaked into eval.")
@@ -675,6 +713,72 @@ def eval_ast(node, x: float) -> float:
 
 def eval_poly(poly: dict[int, float], x: float) -> float:
     return sum(c * (x**e) for e, c in poly.items())
+
+
+def _generate_polar(
+    raw: str, x_min: float | None = None, x_max: float | None = None, x_step: float | None = None
+) -> dict:
+    """Build (x, y) points for a polar formula ``r = f(θ)``.
+
+    ``x_min``/``x_max``/``x_step`` bound the angle θ (default 0..4π, two
+    turns); each valid (θ, r) maps to (r·cos θ, r·sin θ). Non-finite r and
+    asymptote blow-ups split the curve into segments.
+    """
+    sol = solve_equation(raw, polar=True)
+    if (x_min is None) != (x_max is None):
+        raise SolverError("Provide both x_min and x_max, or neither.")
+    if x_min is None:
+        lo, hi = 0.0, DEFAULT_POLAR_MAX
+    else:
+        assert x_max is not None  # guaranteed by the both-or-neither check
+        if x_min > x_max:
+            raise SolverError("x_min must be <= x_max.")
+        lo, hi = x_min, x_max
+
+    if x_step is not None:
+        if not x_step > 0 or x_step > 1000:
+            raise SolverError("x_step must be > 0 and <= 1000.")
+        step = x_step
+    else:
+        step = nice_ceil((hi - lo) / AUTO_RANGE_LIMIT)
+    n = int((hi - lo) / step + 1e-9) + 1
+    if n > MAX_POINTS_PER_BRANCH:
+        raise SolverError(
+            f"Range too large (max {MAX_POINTS_PER_BRANCH} points) — increase the step."
+        )
+    thetas = [lo + i * step for i in range(n) if lo + i * step <= hi + 1e-9]
+
+    segments = []
+    cur = []
+    for th in thetas:
+        try:
+            r = eval_ast(sol["expr"], th) / eval_ast(sol["b"], th)
+        except (ValueError, ZeroDivisionError, OverflowError):
+            r = float("nan")
+        if not math.isfinite(r) or abs(r) > FUNCTION_Y_LIMIT:
+            if cur:
+                segments.append(cur)
+                cur = []
+            continue
+        x, y = r * math.cos(th), r * math.sin(th)
+        if not (math.isfinite(x) and math.isfinite(y)):
+            if cur:
+                segments.append(cur)
+                cur = []
+            continue
+        cur.append((x, y))
+    if cur:
+        segments.append(cur)
+    if not segments:
+        raise SolverError("No real points for the given \u03b8 range.")
+
+    sol["kind"] = "polar"
+    return {
+        "solution": sol,
+        "x_range": (lo, hi),
+        "step": step,
+        "branches": [{"label": "", "points": seg} for seg in segments],
+    }
 
 
 def _eval_function(sol: dict, x: float) -> float | None:
@@ -747,22 +851,28 @@ def auto_range(sol: dict) -> tuple[int, int]:
 
 
 def generate_points(
-    raw: str, x_min: float | None = None, x_max: float | None = None, x_step: float | None = None
+    raw: str,
+    x_min: float | None = None,
+    x_max: float | None = None,
+    x_step: float | None = None,
+    mode: str = "cartesian",
 ) -> dict:
     """Solve ``raw`` and build branch points.
 
-    Returns ``{"solution", "x_range": (lo, hi), "step", "branches": [...]}``
-    where each branch is ``{"label", "points": [(x, y), ...]}``. Linear
-    formulas yield one branch (label ""), quadratic ones two ("+", "−"),
-    function formulas one per contiguous segment.
+    Cartesian (default): as documented — linear formulas yield one branch
+    (label ""), quadratic ones two ("+", "−"), function formulas one per
+    contiguous segment.
 
-    ``x_min``/``x_max`` override the range; when omitted, linear formulas use
-    x = 1..100, quadratic formulas derive a range from the real domain
-    (see :func:`auto_range`), and function formulas use 1..100 sampled at a
-    "nice" step (~AUTO_RANGE_LIMIT points). ``x_step`` (> 0, <= 1000, may be
-    fractional) controls the sampling; every range is capped at
-    MAX_POINTS_PER_BRANCH points.
+    Polar (``mode="polar"``): the formula is ``r = f(θ)``; ``x_min``/
+    ``x_max``/``x_step`` bound the angle θ (default 0..4π at a "nice"
+    step) and each point is mapped to (r·cos θ, r·sin θ). Domain holes and
+    asymptote blow-ups split segments, like function formulas.
+
+    Returns ``{"solution", "x_range": (lo, hi), "step", "branches": [...]}``
+    where each branch is ``{"label", "points": [(x, y), ...]}``.
     """
+    if mode == "polar":
+        return _generate_polar(raw, x_min, x_max, x_step)
     sol = solve_equation(raw)
     if (x_min is None) != (x_max is None):
         raise SolverError("Provide both x_min and x_max, or neither.")

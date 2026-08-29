@@ -348,3 +348,65 @@ def test_function_errors(raw, needle):
 def test_function_range_caps_still_apply():
     with pytest.raises(solver.SolverError, match="Range too large"):
         solver.generate_points("y = sin(x)", x_min=1, x_max=1_000_000)
+
+
+# --- polar mode (P2-4-ish): r = f(θ) ---
+@pytest.mark.parametrize(
+    "raw,display",
+    [
+        ("r = 2θ", "r = 2θ"),
+        ("r = 2*theta", "r = 2θ"),
+        ("r = 2/θ", "r = 2 / θ"),
+        ("r = cos(2θ)", "r = cos(2θ)"),
+        ("r = θ/2", "r = θ / 2"),
+        ("2r = 4θ", "r = 2θ"),  # linear in r with a coefficient
+        ("r = 2 + sin(3θ)", "r = 2 + sin(3θ)"),
+    ],
+)
+def test_polar_display(raw, display):
+    sol = solver.solve_equation(raw, polar=True)
+    assert sol["kind"] == "polar"
+    assert sol["display"] == display
+
+
+def test_polar_points_archimedean():
+    # r = 2θ  →  at θ = π/2: r = π, point (0, π)
+    result = solver.generate_points("r = 2θ", mode="polar")
+    assert result["solution"]["kind"] == "polar"
+    assert result["x_range"] == (0.0, 4 * math.pi)
+    assert result["step"] == 0.05  # nice step over 0..4π
+    pts = result["branches"][0]["points"]
+    assert len(pts) == 252
+    # nearest sample to θ = π/2 maps to x ≈ 0, y ≈ π
+    near = min(pts, key=lambda p: abs(p[0]) + abs(p[1] - math.pi))
+    assert abs(near[0]) < 0.1 and abs(near[1] - math.pi) < 0.1
+
+
+def test_polar_explicit_theta_range():
+    result = solver.generate_points("r = 2θ", x_min=0, x_max=math.pi, mode="polar")
+    assert result["x_range"] == (0, math.pi)
+    assert len(result["branches"][0]["points"]) == 315  # nice step 0.01 → 315 points
+
+
+def test_polar_rose():
+    # r = cos(2θ) is a four-petal rose; all points within the unit circle
+    result = solver.generate_points("r = cos(2θ)", mode="polar")
+    pts = result["branches"][0]["points"]
+    assert all(math.hypot(x, y) <= 1.0 + 1e-9 for x, y in pts)
+
+
+def test_polar_division_zero_splits_segments():
+    # r = 2/θ is undefined at θ = 0 → segment starts after 0
+    result = solver.generate_points("r = 2/θ", mode="polar")
+    assert result["branches"][0]["points"][0][0] > 0 or result["branches"][0]["points"][0][1] != 0
+
+
+def test_polar_errors():
+    with pytest.raises(solver.SolverError, match="linear in r"):
+        solver.solve_equation("r^2 = 2θ", polar=True)
+    with pytest.raises(solver.SolverError, match="no effective r term"):
+        solver.solve_equation("θ = 2", polar=True)
+    with pytest.raises(solver.SolverError, match="Unknown function"):
+        solver.solve_equation("r = foo(θ)", polar=True)
+    with pytest.raises(solver.SolverError, match="No real points"):
+        solver.generate_points("r = log(θ)", x_min=-10, x_max=-1, mode="polar")

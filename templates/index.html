@@ -62,6 +62,15 @@
     color: var(--muted); padding: 4px 6px; border-radius: 6px;
   }
   .row-del:hover { color: var(--error-fg); background: var(--hover); }
+  .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+  .tab {
+    padding: 8px 18px; font-size: 14px; font-weight: 600; font-family: inherit;
+    background: var(--card); color: var(--fg-soft);
+    border: 1px solid var(--border); border-radius: 999px; cursor: pointer;
+  }
+  .tab:hover { background: var(--hover); }
+  .tab.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .mode-hint { color: var(--muted); font-size: 13px; margin: -8px 0 14px; min-height: 16px; }
   .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 0 0 12px; align-items: center; }
   .legend-item { display: inline-flex; gap: 7px; align-items: center; font-size: 13.5px; color: var(--fg-soft); }
   .dot-inline { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: baseline; }
@@ -105,6 +114,12 @@
     <p>Enter an equation in x and y — it is solved for y and plotted for x = 1 … 100, with (0,0) at the centre of the graph. Functions: <code>sin cos tan log sqrt exp abs</code> (+ <code>e</code>, <code>pi</code>). Drag to pan, scroll or pinch to zoom, double-click to reset.</p>
   </header>
 
+  <div class="tabs" id="tabs">
+    <button type="button" class="tab active" id="tabCartesian" data-mode="cartesian">Cartesian</button>
+    <button type="button" class="tab" id="tabPolar" data-mode="polar">Polar</button>
+  </div>
+  <p class="mode-hint" id="modeHint"></p>
+
   <form class="form" id="form">
     <div id="formulaRows">
       <div class="formula-row">
@@ -121,7 +136,7 @@
       {% endfor %}
     </div>
     <div class="range-row" id="rangeRow">
-      <span class="range-label">x:</span>
+      <span class="range-label" id="rangeLabel1">x:</span>
       <input type="number" id="xMin" value="{{ x_min }}" placeholder="auto" min="-100000" max="100000" step="any" title="x from (blank = auto)">
       <span class="range-label">to</span>
       <input type="number" id="xMax" value="{{ x_max }}" placeholder="auto" min="-100000" max="100000" step="any" title="x to (blank = auto)">
@@ -292,9 +307,9 @@ function exprTokenize(s) {
       i = j;
       continue;
     }
-    if (/[a-zA-Z]/.test(c)) {
+    if (/[a-zA-Z\u03b8]/.test(c)) {
       let j = i;
-      while (j < s.length && /[a-zA-Z]/.test(s[j])) j++;
+      while (j < s.length && /[a-zA-Z\u03b8]/.test(s[j])) j++;
       tokens.push({ t: 'name', n: s.slice(i, j) });
       i = j;
       continue;
@@ -315,7 +330,9 @@ function exprTokenize(s) {
 // Recursive descent: expr := term (('+'|'-') term)* ; term := unary
 // (('*'|'/') unary)* ; unary := ('+'|'-') unary | power ;
 // power := primary ('^' unary)?  (so "-x^2" == "-(x^2)").
-function parseExprTokens(tokens) {
+// polar=true maps "r" to the radius variable (like y); θ/theta is always
+// the angle variable.
+function parseExprTokens(tokens, polar) {
   let pos = 0;
   const peek = () => (pos < tokens.length ? tokens[pos] : null);
   const next = () => tokens[pos++];
@@ -358,7 +375,8 @@ function parseExprTokens(tokens) {
     if (t.t === 'num') return { t: 'num', v: t.v };
     if (t.t === 'name') {
       if (t.n === 'x') return { t: 'x' };
-      if (t.n === 'y') return { t: 'y' };
+      if (t.n === 'y' || (polar && t.n === 'r')) return { t: 'y' };
+      if (t.n === '\u03b8' || t.n === 'theta') return { t: 'theta' };
       const nx = peek();
       if (nx && nx.t === 'op' && nx.o === '(') {
         next();
@@ -383,10 +401,10 @@ function parseExprTokens(tokens) {
   return expr();
 }
 
-function parseExpr(s) {
+function parseExpr(s, polar) {
   const r = exprTokenize(s);
   if (r.error) return { error: r.error };
-  try { return { node: parseExprTokens(r.tokens) }; }
+  try { return { node: parseExprTokens(r.tokens, polar) }; }
   catch (e) { return { error: e.message }; }
 }
 
@@ -398,7 +416,7 @@ const NONLINEAR = {};
 
 function linearize(node) {
   switch (node.t) {
-    case 'num': case 'sym': case 'x': return { a: null, b: node };
+    case 'num': case 'sym': case 'x': case 'theta': return { a: null, b: node };
     case 'y': return { a: { t: 'num', v: 1 }, b: { t: 'num', v: 0 } };
     case 'neg': {
       const r = linearize(node.a);
@@ -451,7 +469,7 @@ function subA(a, b) {
 // Constant folding + identity elimination (x*1, x+0, 0*x, ...).
 function simplify(node) {
   switch (node.t) {
-    case 'num': case 'sym': case 'x': case 'y': return node;
+    case 'num': case 'sym': case 'x': case 'y': case 'theta': return node;
     case 'neg': {
       const c = simplify(node.a);
       if (c.t === 'num') return { t: 'num', v: -c.v };
@@ -503,6 +521,10 @@ function simplify(node) {
           if (r.v === 0) return { t: 'b', op: '/', l: l, r: r };
           return { t: 'num', v: l.v / r.v };
         }
+        if (r.t === 'num' && l.t === 'b' && l.op === '*' && l.l.t === 'num') {
+          // (a·inner) / b  →  (a/b)·inner   e.g. (4θ)/2 → 2θ
+          return simplify({ t: 'b', op: '*', l: { t: 'num', v: l.l.v / r.v }, r: l.r });
+        }
         return { t: 'b', op: '/', l: l, r: r };
       }
     }
@@ -512,7 +534,7 @@ function simplify(node) {
 
 function prec(node) {
   switch (node.t) {
-    case 'num': case 'sym': case 'x': case 'y': case 'f': return 4;
+    case 'num': case 'sym': case 'x': case 'y': case 'theta': case 'f': return 4;
     case 'neg': case 'pow': return 3;
     case 'b': return (node.op === '*' || node.op === '/') ? 2 : 1;
   }
@@ -525,6 +547,7 @@ function astStr(node) {
     case 'num': return fmt(node.v);
     case 'sym': return node.n;
     case 'x': return 'x';
+    case 'theta': return '\u03b8';
     case 'f': return node.n + '(' + astStr(node.a) + ')';
     case 'neg': {
       const inner = astStr(node.a);
@@ -562,12 +585,12 @@ function astStr(node) {
   return '';
 }
 
-// Solve an equation linear in y as y = (B_r − B_l)/(A_l − A_r).
-// Returns the solution, an {error}, or null when not linear in y.
-function solveFunctional(lhsStr, rhsStr) {
-  const lp = parseExpr(lhsStr);
+// Solve an equation linear in y (or r, when polar) as y = (B_r − B_l)/(A_l − A_r).
+// Returns the solution, an {error}, or null when not linear in the radius var.
+function solveFunctional(lhsStr, rhsStr, polar) {
+  const lp = parseExpr(lhsStr, polar);
   if (lp.error) return { error: lp.error };
-  const rp = parseExpr(rhsStr);
+  const rp = parseExpr(rhsStr, polar);
   if (rp.error) return { error: rp.error };
   let la, lb, ra, rb;
   try {
@@ -578,31 +601,45 @@ function solveFunctional(lhsStr, rhsStr) {
     if (e === NONLINEAR) return null;   // fall back to the polynomial solver
     return { error: e.message };
   }
-  let aTot = simplify(subA(la, ra));          // y coefficient
+  const varName = polar ? 'r' : 'y';
+  const noTerm = 'Equation has no effective ' + varName + ' term — cannot solve for ' + varName + '.';
+  let aTot = subA(la, ra);                       // y/r coefficient
   let expr = simplify({ t: 'b', op: '-', l: rb, r: lb });  // R(x)
-  if (!aTot || (aTot.t === 'num' && aTot.v === 0)) {
-    return { error: 'Equation has no effective y term — cannot solve for y.' };
-  }
+  if (!aTot) return { error: noTerm };
+  aTot = simplify(aTot);
+  if (aTot.t === 'num' && aTot.v === 0) return { error: noTerm };
   if (aTot.t === 'num' && aTot.v < 0) { aTot = { t: 'num', v: -aTot.v }; expr = { t: 'neg', a: expr }; }
   else if (aTot.t === 'neg' && aTot.a.t === 'num') { aTot = { t: 'num', v: -aTot.a.v }; expr = { t: 'neg', a: expr }; }
+  // Fold a numeric coefficient into the expression when possible:
+  // 2r = 4θ  →  r = 2θ  (instead of r = (4θ) / 2); 2r = 6 → r = 3.
+  if (aTot.t === 'num' && aTot.v !== 1) {
+    const c = aTot.v;
+    if (expr.t === 'num') { expr = { t: 'num', v: expr.v / c }; aTot = { t: 'num', v: 1 }; }
+    else if (expr.t === 'b' && expr.op === '*' && expr.l.t === 'num') {
+      expr = simplify({ t: 'b', op: '*', l: { t: 'num', v: expr.l.v / c }, r: expr.r });
+      aTot = { t: 'num', v: 1 };
+    }
+  }
 
+  const prefix = polar ? 'r = ' : 'y = ';
   const eStr = astStr(expr);
   let display;
   if (aTot.t === 'num' && aTot.v === 1) {
-    display = 'y = ' + eStr;
+    display = prefix + eStr;
   } else {
     const body = expr.t === 'b' ? '(' + eStr + ')' : eStr;
-    display = 'y = ' + body + ' / ' + astStr(aTot);
+    display = prefix + body + ' / ' + astStr(aTot);
   }
-  return { kind: 'function', expr: expr, b: aTot, display: display };
+  return { kind: polar ? 'polar' : 'function', expr: expr, b: aTot, display: display };
 }
 
 // Solve "expr = expr" (or bare "expr", treated as y = expr) for y in terms of x.
 // Linear in y -> { kind:'linear', a:0, b, denom, poly, display }
 // Quadratic in y (a·y² + b·y = R(x)) -> { kind:'quadratic', a, b, poly, display }
 // y = f(x) with functions/parens -> { kind:'function', expr, b, display }
+// polar=true: r = f(θ) -> { kind:'polar', expr, b, display }
 // Returns { error } on failure.
-function solveEquation(raw) {
+function solveEquation(raw, polar) {
   let s = String(raw).replace(/\s+/g, '').replace(/\u2212/g, '-');
   if (!s) return { error: 'Enter a formula first.' };
 
@@ -616,8 +653,13 @@ function solveEquation(raw) {
   }
   if (!lhsStr || !rhsStr) return { error: 'Both sides of "=" must have content.' };
 
+  if (polar) {
+    const r = solveFunctional(lhsStr, rhsStr, true);
+    if (!r) return { error: 'Polar equations must be linear in r — use the form r = f(\u03b8).' };
+    return r;
+  }
   if (FUNC_RE.test(s)) {
-    const r = solveFunctional(lhsStr, rhsStr);
+    const r = solveFunctional(lhsStr, rhsStr, false);
     if (r) return r;
   }
   return solvePolynomial(lhsStr, rhsStr);
@@ -688,6 +730,7 @@ function evalAst(node, x) {
     case 'num': return node.v;
     case 'sym': return node.n === 'e' ? Math.E : Math.PI;
     case 'x': return x;
+    case 'theta': return x;
     case 'neg': return -evalAst(node.a, x);
     case 'f': {
       const v = evalAst(node.a, x);
@@ -757,7 +800,7 @@ function buildBranches(sol, xMin, xMax, xStep) {
   }
   let lo = xMin, hi = xMax;
   if (lo === undefined || hi === undefined) {
-    const r = autoRange(sol);
+    const r = sol.kind === 'polar' ? { min: 0, max: 4 * Math.PI } : autoRange(sol);
     lo = r.min; hi = r.max;
   }
   let step;
@@ -768,7 +811,7 @@ function buildBranches(sol, xMin, xMax, xStep) {
     step = 1;
     if (xMin === undefined || xMax === undefined) {
       if (sol.kind === 'quadratic' && (hi - lo) > 400) step = Math.ceil((hi - lo) / 400);
-      else if (sol.kind === 'function') step = niceCeil((hi - lo) / 400);
+      else if (sol.kind === 'function' || sol.kind === 'polar') step = niceCeil((hi - lo) / 400);
     }
   }
   const n = Math.floor((hi - lo) / step + 1e-9) + 1;
@@ -806,6 +849,33 @@ function buildBranches(sol, xMin, xMax, xStep) {
     }
     if (cur.length) segments.push(cur);
     if (!segments.length) return { error: 'No real y for the given x range.' };
+    return {
+      xRange: { min: lo, max: hi },
+      step: step,
+      branches: segments.map(seg => ({ label: '', points: seg })),
+    };
+  }
+  if (sol.kind === 'polar') {
+    // r = f(θ): sample θ, map each valid point to (r·cos θ, r·sin θ).
+    const segments = [];
+    let cur = [];
+    for (const th of xs) {
+      const num = evalAst(sol.expr, th);
+      const den = evalAst(sol.b, th);
+      const r = num / den;
+      if (!isFinite(r) || Math.abs(r) > FUNCTION_Y_LIMIT) {
+        if (cur.length) { segments.push(cur); cur = []; }
+        continue;
+      }
+      const px = r * Math.cos(th), py = r * Math.sin(th);
+      if (!isFinite(px) || !isFinite(py)) {
+        if (cur.length) { segments.push(cur); cur = []; }
+        continue;
+      }
+      cur.push({ x: px, y: py });
+    }
+    if (cur.length) segments.push(cur);
+    if (!segments.length) return { error: 'No real points for the given \u03b8 range.' };
     return {
       xRange: { min: lo, max: hi },
       step: step,
@@ -1058,6 +1128,35 @@ function activeFormulaField() {
   return document.getElementById('formula');
 }
 
+// Mode: 'cartesian' (y = f(x)) or 'polar' (r = f(θ)); carried in the URL.
+let mode = 'cartesian';
+
+function applyModeUI() {
+  const polar = mode === 'polar';
+  document.getElementById('tabCartesian').classList.toggle('active', !polar);
+  document.getElementById('tabPolar').classList.toggle('active', polar);
+  document.getElementById('rangeLabel1').textContent = polar ? '\u03b8:' : 'x:';
+  document.getElementById('modeHint').textContent = polar
+    ? 'r = f(\u03b8) \u00b7 write the angle as \u03b8 or theta \u00b7 the x/step boxes bound \u03b8'
+    : '';
+  document.querySelectorAll('#formulaRows .formula-input').forEach(function (inp) {
+    inp.placeholder = polar ? 'e.g. r = 2\u03b8' : 'e.g. y = sin(x)';
+  });
+}
+
+function currentModeFromUrl() {
+  try {
+    return new URLSearchParams(location.search).get('mode') === 'polar' ? 'polar' : 'cartesian';
+  } catch (e) { return 'cartesian'; }
+}
+
+function setMode(m) {
+  if (m !== 'cartesian' && m !== 'polar') m = 'cartesian';
+  mode = m;
+  applyModeUI();
+  plot();
+}
+
 // Non-empty, deduped list of formulas from the input rows (max 5 rows in UI).
 function collectFormulas() {
   const out = [];
@@ -1078,7 +1177,7 @@ function addFormulaRow(value) {
   input.className = 'formula-input';
   input.spellcheck = false;
   input.autocomplete = 'off';
-  input.placeholder = 'e.g. y = cos(x)';
+  input.placeholder = mode === 'polar' ? 'e.g. r = 2\u03b8' : 'e.g. y = cos(x)';
   if (value) input.value = value;
   const dot = document.createElement('span');
   dot.className = 'color-dot';
@@ -1220,10 +1319,11 @@ function copyLink() {
 }
 
 // Collect the formula + range inputs into a query string. Formulas become
-// repeated `formula=` params: ?formula=a&formula=b&x_min=…
+// repeated `formula=` params: ?mode=polar&formula=r+%3D+2%CE%B8&x_min=…
 function rangeParams(formulas) {
   const v = id => document.getElementById(id).value.trim();
   const p = new URLSearchParams();
+  p.set('mode', mode);
   formulas.forEach(function (f) { p.append('formula', f); });
   const xMin = v('xMin'), xMax = v('xMax'), xStep = v('xStep');
   if (xMin !== '') p.set('x_min', xMin);
@@ -1271,15 +1371,16 @@ async function plot() {
     };
     const curves = [];
     let firstRange = null, firstStep = 1;
+    const polar = mode === 'polar';
     for (const f of formulas) {
-      const sol = solveEquation(f);
+      const sol = solveEquation(f, polar);
       if (sol.error) { showError(sol.error); document.getElementById('solved').textContent = ''; return; }
       const built = buildBranches(sol, rv('xMin'), rv('xMax'), rv('xStep'));
       if (built.error) { showError(built.error); document.getElementById('solved').textContent = ''; return; }
       if (!firstRange) { firstRange = built.xRange; firstStep = built.step; }
       curves.push({ formula: f, display: sol.display, kind: sol.kind, branches: built.branches });
     }
-    data = { formulas: formulas, x_range: firstRange, step: firstStep, curves: curves };
+    data = { mode: mode, formulas: formulas, x_range: firstRange, step: firstStep, curves: curves };
   }
 
   if (seq !== plotSeq) return;   // a newer plot superseded this one
@@ -1291,9 +1392,10 @@ async function plot() {
   const multiNote = data.curves.length > 1 ? (' \u00b7 ' + data.curves.length + ' formulas') : '';
   const given = data.formulas.join(' ; ');
   const displays = data.curves.map(c => c.display).join(' ; ');
+  const rangeVar = mode === 'polar' ? '\u03b8' : 'x';
   document.getElementById('solved').textContent =
     'Given:  ' + given + '    \u2192    ' + displays +
-    '    (plotted for x = ' + rng.min + ' \u2026 ' + rng.max + stepNote + multiNote + ')';
+    '    (plotted for ' + rangeVar + ' = ' + rng.min + ' \u2026 ' + rng.max + stepNote + multiNote + ')';
   const curves = data.curves.map(function (c, i) {
     return { color: curveColors[i % curveColors.length], display: c.display, branches: c.branches };
   });
@@ -1412,6 +1514,10 @@ function init() {
   let savedTheme = 'light';
   try { savedTheme = localStorage.getItem('xygh:theme') || 'light'; } catch (e) {}
   applyTheme(savedTheme === 'dark' ? 'dark' : 'light');
+  document.getElementById('tabCartesian').addEventListener('click', function () { setMode('cartesian'); });
+  document.getElementById('tabPolar').addEventListener('click', function () { setMode('polar'); });
+  mode = currentModeFromUrl();
+  applyModeUI();
   onRowsChanged();
   renderHistory();
   plot();

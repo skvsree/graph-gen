@@ -1,5 +1,8 @@
 """API tests for app/main.py via FastAPI TestClient."""
 
+import math
+
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -41,6 +44,50 @@ def test_index_escapes_formula_against_xss():
     assert r.status_code == 200
     assert "<script>alert(1)</script>" not in r.text
     assert "&lt;script&gt;" in r.text
+
+
+def test_index_renders_polar_mode():
+    r = client.get("/", params={"mode": "polar", "formula": "r = 2θ"})
+    assert r.status_code == 200
+    assert 'id="tabPolar"' in r.text
+    assert 'value="r = 2θ"' in r.text
+
+
+def test_index_invalid_mode_returns_400():
+    r = client.get("/", params={"mode": "bogus"})
+    assert r.status_code == 400
+
+
+def test_api_points_polar():
+    r = client.get("/api/points", params={"formula": "r = 2θ", "mode": "polar"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["mode"] == "polar"
+    assert body["curves"][0]["kind"] == "polar"
+    assert body["curves"][0]["display"] == "r = 2θ"
+    assert body["x_range"]["min"] == 0.0
+    assert body["x_range"]["max"] == pytest.approx(4 * math.pi)
+    assert len(body["curves"][0]["branches"][0]["points"]) == 252
+
+
+def test_api_points_polar_explicit_theta_range():
+    r = client.get("/api/points", params={"formula": "r = 2θ", "mode": "polar", "x_min": 0, "x_max": math.pi})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["x_range"] == {"min": 0, "max": math.pi}
+    assert len(body["curves"][0]["branches"][0]["points"]) == 315
+
+
+def test_api_points_polar_invalid_returns_400():
+    r = client.get("/api/points", params={"formula": "r^2 = 2θ", "mode": "polar"})
+    assert r.status_code == 400
+    assert "linear in r" in r.json()["detail"]
+
+
+def test_api_points_invalid_mode_returns_400():
+    r = client.get("/api/points", params={"formula": "y = x", "mode": "bogus"})
+    assert r.status_code == 400
+    assert "mode" in r.json()["detail"]
 
 
 def test_api_points_default_linear():

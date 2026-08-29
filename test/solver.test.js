@@ -179,4 +179,30 @@ checkErr('y cancels out', 'y + sin(x) = y + 2', 'no effective y term');
   check('sqrt no real y', b.error || '', 'No real y for the given x range.');
 }
 
+// --- polar mode: r = f(θ) ---
+{
+  const sol = solveEquation('r = 2θ', true);
+  check('polar solves', sol.kind, 'polar');
+  check('polar display', sol.display, 'r = 2θ');
+}
+check('polar theta alias', solveEquation('r = 2*theta', true).display, 'r = 2θ');
+check('polar coefficient fold', solveEquation('2r = 4θ', true).display, 'r = 2θ');
+check('polar rose', solveEquation('r = cos(2θ)', true).display, 'r = cos(2θ)');
+check('polar division', solveEquation('r = 2/θ', true).display, 'r = 2 / θ');
+{
+  const b = buildBranches(solveEquation('r = 2θ', true));
+  check('polar default θ range', b.xRange, { min: 0, max: 4 * Math.PI });
+  check('polar 252 pts', b.branches[0].points.length, 252);
+  const near = b.branches[0].points.filter(p => Math.abs(p.y - Math.PI) < 0.1 && Math.abs(p.x) < 0.1);
+  check('polar θ=π/2 maps to (≈0, π)', near.length >= 1, true);
+}
+function checkErrPolar(name, raw, needle) {
+  const sol = solveEquation(raw, true);
+  if (sol.error && sol.error.includes(needle)) { console.log('ok   ' + name); }
+  else { failures++; console.log('FAIL ' + name + ' -> ' + JSON.stringify(sol)); }
+}
+checkErrPolar('polar non-linear', 'r^2 = 2θ', 'linear in r');
+checkErrPolar('polar no r', 'θ = 2', 'no effective r term');
+checkErrPolar('polar unknown func', 'r = foo(θ)', 'Unknown function');
+
 process.exit(failures === 0 ? 0 : 1);

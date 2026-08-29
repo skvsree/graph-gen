@@ -47,8 +47,8 @@ Open http://127.0.0.1:8123
 
 | Endpoint | Description |
 |---|---|
-| `GET /` | Renders the graph page. The formula is a query param: `/?formula=x%20%2B%20y%20%3D%203`. The page keeps the URL in sync (`?formula=…`) as you plot, so links are shareable. |
-| `GET /api/points?formula=…&formula=…&x_min=…&x_max=…&x_step=…` | Solves one or more formulas (max 5, repeated `formula=` params) and returns the curves as JSON: `{"formulas", "x_range": {"min","max"}, "step", "curves": [{"formula", "display", "kind", "branches": [{"label","points": [{"x","y"}, …]}, …]}, …]}`. Linear formulas return one branch, quadratic-in-`y` two ("+", "−"), function formulas one per contiguous segment. `x_min`/`x_max`/`x_step` (fractions allowed; step must be > 0 and ≤ 1000; both range bounds required together) override the default range and sampling — e.g. `x_step=0.1` for a smooth trig curve. Invalid formulas (or no real points) return `400` with a human-readable `detail`. |
+| `GET /` | Renders the graph page. The formula is a query param: `/?formula=x%20%2B%20y%20%3D%203`. The page keeps the URL in sync (`?formula=…`) as you plot, so links are shareable. `?mode=polar` opens the polar tab (default `cartesian`). |
+| `GET /api/points?mode=…&formula=…&formula=…&x_min=…&x_max=…&x_step=…` | Solves one or more formulas (max 5, repeated `formula=` params) and returns the curves as JSON: `{"mode", "formulas", "x_range": {"min","max"}, "step", "curves": [{"formula", "display", "kind", "branches": [{"label","points": [{"x","y"}, …]}, …]}, …]}`. `mode` is `cartesian` (default) or `polar`. Linear formulas return one branch, quadratic-in-`y` two ("+", "−"), function formulas one per contiguous segment. `x_min`/`x_max`/`x_step` (fractions allowed; step must be > 0 and ≤ 1000; both range bounds required together) override the default range and sampling — e.g. `x_step=0.1` for a smooth trig curve. In polar mode they bound θ. Invalid formulas (or no real points) return `400` with a human-readable `detail`. |
 | `GET /health` | Liveness probe: `{"status": "ok", "app": "xy-graph-gen"}` |
 
 ## Supported input
@@ -70,6 +70,9 @@ Any linear equation, and simple polynomials in `x` (linear in `y`):
 | `2y = sin(x)`     | `y = sin(x) / 2` — any equation linear in y |
 | `sin(x) + y = 3`  | `y = 3 − sin(x)` |
 | `y = (x+1)^2`     | `y = (x + 1)^2` — parentheses work in function form |
+| `r = 2θ` (polar tab) | `r = 2θ` — Archimedean spiral; points are (r·cos θ, r·sin θ), default θ = 0…4π |
+| `r = cos(2θ)` (polar tab) | `r = cos(2θ)` — four-petal rose |
+| `r = 2/θ` (polar tab) | `r = 2 / θ` — hyperbolic spiral; θ = 0 skipped |
 
 - A bare expression without `=` is treated as `y = <expr>`.
 - Terms like `2x`, `-3y`, `x^2`, decimals (`1.5x`) are supported.
@@ -85,6 +88,11 @@ Any linear equation, and simple polynomials in `x` (linear in `y`):
   constants `e` and `pi`, operators `+ - * / ^` (implicit `2x`, `2sin(x)`),
   and any equation linear in `y` (`2y = sin(x)`, `y*sin(x) = 1`). `log` is
   the natural logarithm. Points outside a function's domain are skipped.
+- **Polar mode** (`?mode=polar`, polar tab): formulas take the form
+  `r = f(θ)` — linear in `r`. Use `θ` or `theta` for the angle
+  (e.g. `r = 2θ`, `r = 3*sin(2θ)`, `r = e^(θ/10)`). `x_min`/`x_max`/`x_step`
+  bound θ in this mode; the default range is θ = 0…4π at a "nice" step.
+  Points map to the plane as (r·cos θ, r·sin θ) with signed r.
 - Everything else (plain polynomials) uses the term solver, which still
   rejects parentheses — parenthesised formulas that are not linear in `y`
   (e.g. `(x+1)^2 + y^2 = 100`) error with "Parentheses are not supported
@@ -148,6 +156,7 @@ P3 = bigger / probably not worth it.
 ### P2 — capability upgrades
 - [x] General functions: `sin`, `cos`, `tan`, `log`, `sqrt`, `exp`, `abs` (real grapher territory)
 - [x] Multiple formulas on one graph with legend (batch `/api/points` or comma-separated input)
+- [x] Polar mode in a second tab (`?mode=polar&formula=r+%3D+2%CE%B8`; `r = f(θ)` with `θ`/`theta` for the angle, `x_min`/`x_max`/`x_step` bound θ)
 - [ ] Derivative + tangent lines (symbolic for polynomials — cheap: differentiate the coefficient map)
 - [ ] Intersection points between curves (solve linear/quadratic pairs symbolically)
 - [x] Zoom & pan on the canvas (drag to pan, wheel to zoom)

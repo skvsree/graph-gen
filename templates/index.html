@@ -107,9 +107,13 @@
     color: var(--fg-soft); list-style: none; user-select: none;
   }
   .accordion summary::-webkit-details-marker { display: none; }
-  .accordion summary::before { content: '\u25b8 '; }
-  .accordion[open] summary::before { content: '\u25be '; }
+  .accordion summary::before { content: '\25b8 '; }
+  .accordion[open] summary::before { content: '\25be '; }
   .accordion .chips, .accordion .table-scroll { margin: 0 14px 12px; }
+  /* Belt-and-braces: never let a closed accordion paint its content, even in
+     browsers where <details> fails to hide it. */
+  .accordion:not([open]) .chips,
+  .accordion:not([open]) .table-scroll { display: none !important; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; font-family: ui-monospace, Consolas, monospace; }
   th, td { padding: 5px 14px; text-align: right; border-bottom: 1px solid var(--row-border); color: var(--fg); }
   th { position: sticky; top: 0; background: var(--bg); color: var(--muted); }

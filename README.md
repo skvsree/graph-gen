@@ -15,10 +15,17 @@ constants `e` and `pi`, parentheses and `+ - * / ^`. Domain holes and
 vertical asymptotes are skipped (the polyline breaks across an asymptote),
 so `tan` and reciprocal functions render cleanly.
 
-The graph is interactive: **drag to pan, scroll to zoom, double-click to
-reset**. A theme toggle (dark/light, persisted) and a grid on/off toggle sit
+The graph is interactive: **drag to pan, scroll or pinch to zoom, double-click
+to reset**. A theme toggle (dark/light, persisted) and a grid on/off toggle sit
 next to the plot button, and every successful plot is remembered in a
 localStorage history row (last 12, click a chip to re-plot, ✕ clear).
+
+**Plot up to 5 formulas at once** ("+ Add formula" adds an input row). Each
+line gets a distinct colour (randomly chosen per graph from a palette — never
+two lines the same), a legend renders above the graph, and the points table is
+grouped per formula. The shareable URL carries the formulas as repeated
+`formula=` params: `/?formula=y%3Dsin(x)&formula=y%3Dcos(x)&x_min=0&x_max=6.28`.
+One shared x-range/step applies to all curves.
 
 FastAPI + Jinja2 + vanilla JS. The page plots from the server-side solver
 (`/api/points`) and falls back to a built-in client-side solver if the API is
@@ -40,7 +47,7 @@ Open http://127.0.0.1:8123
 | Endpoint | Description |
 |---|---|
 | `GET /` | Renders the graph page. The formula is a query param: `/?formula=x%20%2B%20y%20%3D%203`. The page keeps the URL in sync (`?formula=…`) as you plot, so links are shareable. |
-| `GET /api/points?formula=…&x_min=…&x_max=…&x_step=…` | Solves the formula and returns the branches as JSON: `{"formula", "display", "kind", "x_range": {"min","max"}, "step", "branches": [{"label","points": [{"x","y"}, …]}, …]}`. Linear formulas return one branch, quadratic-in-`y` two ("+", "−"), function formulas one per contiguous segment. `x_min`/`x_max`/`x_step` (fractions allowed; step must be > 0 and ≤ 1000; both range bounds required together) override the default range and sampling — e.g. `x_step=0.1` for a smooth trig curve. Invalid formulas (or no real points) return `400` with a human-readable `detail`. |
+| `GET /api/points?formula=…&formula=…&x_min=…&x_max=…&x_step=…` | Solves one or more formulas (max 5, repeated `formula=` params) and returns the curves as JSON: `{"formulas", "x_range": {"min","max"}, "step", "curves": [{"formula", "display", "kind", "branches": [{"label","points": [{"x","y"}, …]}, …]}, …]}`. Linear formulas return one branch, quadratic-in-`y` two ("+", "−"), function formulas one per contiguous segment. `x_min`/`x_max`/`x_step` (fractions allowed; step must be > 0 and ≤ 1000; both range bounds required together) override the default range and sampling — e.g. `x_step=0.1` for a smooth trig curve. Invalid formulas (or no real points) return `400` with a human-readable `detail`. |
 | `GET /health` | Liveness probe: `{"status": "ok", "app": "xy-graph-gen"}` |
 
 ## Supported input
@@ -139,7 +146,7 @@ P3 = bigger / probably not worth it.
 
 ### P2 — capability upgrades
 - [x] General functions: `sin`, `cos`, `tan`, `log`, `sqrt`, `exp`, `abs` (real grapher territory)
-- [ ] Multiple formulas on one graph with legend (batch `/api/points` or comma-separated input)
+- [x] Multiple formulas on one graph with legend (batch `/api/points` or comma-separated input)
 - [ ] Derivative + tangent lines (symbolic for polynomials — cheap: differentiate the coefficient map)
 - [ ] Intersection points between curves (solve linear/quadratic pairs symbolically)
 - [x] Zoom & pan on the canvas (drag to pan, wheel to zoom)

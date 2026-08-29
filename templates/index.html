@@ -51,6 +51,20 @@
   .form input[type=number]:focus { outline: 2px solid var(--input-focus); border-color: #2563eb; }
   .range-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   .range-label { color: var(--muted); font-size: 13px; }
+  #formulaRows { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+  .formula-row { display: flex; gap: 8px; align-items: center; width: 100%; }
+  .color-dot {
+    width: 14px; height: 14px; border-radius: 50%; flex: none;
+    background: var(--border); border: 1px solid var(--muted);
+  }
+  .row-del {
+    border: none; background: none; cursor: pointer; font-size: 18px; line-height: 1;
+    color: var(--muted); padding: 4px 6px; border-radius: 6px;
+  }
+  .row-del:hover { color: var(--error-fg); background: var(--hover); }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 0 0 12px; align-items: center; }
+  .legend-item { display: inline-flex; gap: 7px; align-items: center; font-size: 13.5px; color: var(--fg-soft); }
+  .dot-inline { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: baseline; }
   .btn-secondary {
     padding: 10px 14px; font-size: 14px; font-weight: 600; font-family: inherit;
     background: var(--card); color: var(--fg-soft); border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
@@ -92,7 +106,20 @@
   </header>
 
   <form class="form" id="form">
-    <input type="text" id="formula" value="{{ formula }}" spellcheck="false" autocomplete="off" placeholder="e.g. y = sin(x)">
+    <div id="formulaRows">
+      <div class="formula-row">
+        <input type="text" id="formula" class="formula-input" value="{{ formulas[0] }}" spellcheck="false" autocomplete="off" placeholder="e.g. y = sin(x)">
+        <span class="color-dot" title="line colour"></span>
+        <button type="button" class="row-del" title="Remove this formula" hidden>&times;</button>
+      </div>
+      {% for f in formulas[1:] %}
+      <div class="formula-row">
+        <input type="text" class="formula-input" value="{{ f }}" spellcheck="false" autocomplete="off" placeholder="e.g. y = cos(x)">
+        <span class="color-dot" title="line colour"></span>
+        <button type="button" class="row-del" title="Remove this formula">&times;</button>
+      </div>
+      {% endfor %}
+    </div>
     <div class="range-row" id="rangeRow">
       <span class="range-label">x:</span>
       <input type="number" id="xMin" value="{{ x_min }}" placeholder="auto" min="-100000" max="100000" step="any" title="x from (blank = auto)">
@@ -102,6 +129,7 @@
       <input type="number" id="xStep" value="{{ x_step }}" placeholder="auto" min="0.0001" max="1000" step="any" title="x step (blank = auto; fractions like 0.1 allowed)">
     </div>
     <button type="submit">Plot</button>
+    <button type="button" class="btn-secondary" id="addFormulaBtn" title="Add another formula (max 5)">+ Add formula</button>
     <button type="button" class="btn-secondary" id="pngBtn" title="Download the graph as PNG">Download PNG</button>
     <button type="button" class="btn-secondary" id="copyBtn" title="Copy a shareable link to this graph">Copy link</button>
     <button type="button" class="btn-secondary" id="themeBtn" title="Toggle dark / light theme">🌙 Dark</button>
@@ -123,6 +151,8 @@
 
   <p id="solved"></p>
   <div id="error"></div>
+
+  <div class="legend" id="legend"></div>
 
   <div class="graphbox">
     <canvas id="graph" width="900" height="640"></canvas>
@@ -809,7 +839,7 @@ const PALETTES = {
   dark: { grid: '#334155', axis: '#e2e8f0', ticks: '#94a3b8', labels: '#e2e8f0' },
 };
 let view = null;        // {cx, cy, unit} — pixel pos of data origin, px per unit
-let lastBranches = null;
+let lastCurves = null;
 let gridOn = true;
 
 function currentTheme() {
@@ -817,9 +847,9 @@ function currentTheme() {
 }
 function palette() { return currentTheme() === 'dark' ? PALETTES.dark : PALETTES.light; }
 
-function redraw() { if (lastBranches) draw(lastBranches); }
+function redraw() { if (lastCurves) draw(lastCurves); }
 
-function draw(branches) {
+function draw(curves) {
   const cv = document.getElementById('graph');
   const ctx = cv.getContext('2d');
   const W = cv.width, H = cv.height;
@@ -827,7 +857,7 @@ function draw(branches) {
   ctx.clearRect(0, 0, W, H);
 
   const all = [];
-  branches.forEach(br => { for (const p of br.points) all.push(p); });
+  curves.forEach(c => c.branches.forEach(br => { for (const p of br.points) all.push(p); }));
   const xs = all.map(p => p.x), ys = all.map(p => p.y);
   const yMin = Math.min(...ys), yMax = Math.max(...ys);
   const xMin = Math.min(...xs), xMax = Math.max(...xs);
@@ -887,37 +917,38 @@ function draw(branches) {
   ctx.fillText('x', W - 20, cy - 10);
   ctx.fillText('y', cx + 12, 18);
 
-  // Line through each branch's points (branch 0 blue, branch 1 teal). The
+  // Line through each curve's branches (each curve has its own colour). The
   // polyline breaks when two consecutive samples jump across a vertical
   // asymptote (tan, 1/x) so no false line is drawn through the wall.
-  const colors = ['#2563eb', '#0d9488'];
-  branches.forEach((br, bi) => {
-    if (!br.points.length) return;
-    ctx.strokeStyle = colors[bi % colors.length];
-    ctx.lineWidth = 2.5;
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    let prevX = null, prevY = null;
-    for (let i = 0; i < br.points.length; i++) {
-      const px = X(br.points[i].x), py = Y(br.points[i].y);
-      if (i === 0) { ctx.moveTo(px, py); }
-      else if (Math.abs(py - prevY) > H && Math.abs(px - prevX) < 20) { ctx.moveTo(px, py); }
-      else { ctx.lineTo(px, py); }
-      prevX = px; prevY = py;
-    }
-    ctx.stroke();
-
-    // Point markers — only when the unit spacing is wide enough that they
-    // don't merge into a solid ribbon.
-    if (unit >= 6) {
-      ctx.fillStyle = colors[bi % colors.length];
-      for (const p of br.points) {
-        const px = X(p.x), py = Y(p.y);
-        if (px < 0 || px > W || py < 0 || py > H) continue;
-        ctx.beginPath(); ctx.arc(px, py, 2.5, 0, Math.PI * 2); ctx.fill();
+  curves.forEach(function (curve) {
+    curve.branches.forEach(function (br) {
+      if (!br.points.length) return;
+      ctx.strokeStyle = curve.color;
+      ctx.lineWidth = 2.5;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      let prevX = null, prevY = null;
+      for (let i = 0; i < br.points.length; i++) {
+        const px = X(br.points[i].x), py = Y(br.points[i].y);
+        if (i === 0) { ctx.moveTo(px, py); }
+        else if (Math.abs(py - prevY) > H && Math.abs(px - prevX) < 20) { ctx.moveTo(px, py); }
+        else { ctx.lineTo(px, py); }
+        prevX = px; prevY = py;
       }
-    }
+      ctx.stroke();
+
+      // Point markers — only when the unit spacing is wide enough that they
+      // don't merge into a solid ribbon.
+      if (unit >= 6) {
+        ctx.fillStyle = curve.color;
+        for (const p of br.points) {
+          const px = X(p.x), py = Y(p.y);
+          if (px < 0 || px > W || py < 0 || py > H) continue;
+          ctx.beginPath(); ctx.arc(px, py, 2.5, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+    });
   });
 }
 
@@ -1009,24 +1040,121 @@ function canvasWheel(e) {
 }
 function canvasDblClick() { view = null; redraw(); }
 
+/* ================= multi-formula state & colours ================= */
+
+// Distinct palette; each plot shuffles it and takes one colour per formula,
+// so lines are always unique (and random-looking) within a graph.
+const CURVE_PALETTE = ['#2563eb', '#0d9488', '#d97706', '#dc2626', '#7c3aed',
+  '#0891b2', '#ca8a04', '#db2777', '#16a34a', '#ea580c', '#4f46e5', '#059669'];
+let curveColors = [];
+
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = a[i]; a[i] = a[j]; a[j] = t;
+  }
+  return a;
+}
+function assignColors(n) {
+  curveColors = shuffle(CURVE_PALETTE).slice(0, n);
+}
+
+// Non-empty, deduped list of formulas from the input rows (max 5 rows in UI).
+function collectFormulas() {
+  const out = [];
+  document.querySelectorAll('#formulaRows .formula-input').forEach(function (inp) {
+    const v = inp.value.trim();
+    if (v && out.indexOf(v) === -1) out.push(v);
+  });
+  return out;
+}
+
+function addFormulaRow(value) {
+  const rows = document.getElementById('formulaRows');
+  if (rows.querySelectorAll('.formula-row').length >= 5) return;
+  const row = document.createElement('div');
+  row.className = 'formula-row';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'formula-input';
+  input.spellcheck = false;
+  input.autocomplete = 'off';
+  input.placeholder = 'e.g. y = cos(x)';
+  if (value) input.value = value;
+  const dot = document.createElement('span');
+  dot.className = 'color-dot';
+  dot.title = 'line colour';
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'row-del';
+  del.title = 'Remove this formula';
+  del.textContent = '\u00d7';
+  del.addEventListener('click', function () { row.remove(); onRowsChanged(); });
+  row.appendChild(input);
+  row.appendChild(dot);
+  row.appendChild(del);
+  rows.appendChild(row);
+  input.focus();
+  onRowsChanged();
+}
+
+function onRowsChanged() {
+  const rows = document.querySelectorAll('#formulaRows .formula-row');
+  document.getElementById('addFormulaBtn').style.display = rows.length >= 5 ? 'none' : '';
+  rows.forEach(function (r) { r.querySelector('.row-del').hidden = rows.length === 1; });
+  const n = collectFormulas().length;
+  if (n !== curveColors.length) assignColors(n || 1);
+  refreshDots();
+}
+
+// Each row's dot shows the colour its formula will get (gray = empty/dupe).
+function refreshDots() {
+  const formulas = collectFormulas();
+  document.querySelectorAll('#formulaRows .formula-row').forEach(function (row) {
+    const dot = row.querySelector('.color-dot');
+    const v = row.querySelector('.formula-input').value.trim();
+    const idx = formulas.indexOf(v);
+    dot.style.background = idx >= 0 ? curveColors[idx] : '';
+  });
+}
+
 /* ================= UI ================= */
 
-function renderTable(branches) {
+function renderTable(curves, colors) {
   const tb = document.getElementById('points');
-  const hasLabels = branches.some(br => br.label !== '');
-  if (!hasLabels) {
-    const pts = [];
-    branches.forEach(br => { for (const p of br.points) pts.push(p); });
-    tb.innerHTML = pts.map(p => '<tr><td>' + fmt(p.x) + '</td><td>' + fmt(p.y) + '</td></tr>').join('');
-    return;
-  }
   let html = '';
-  for (const br of branches) {
-    html += '<tr class="branch-hdr"><td colspan="2">branch ' + br.label + '</td></tr>';
-    html += br.points
-      .map(p => '<tr><td>' + fmt(p.x) + '</td><td>' + fmt(p.y) + '</td></tr>').join('');
-  }
+  curves.forEach(function (c, ci) {
+    const color = (colors && colors[ci]) || '#2563eb';
+    html += '<tr class="branch-hdr"><td colspan="2">' +
+      '<span class="dot-inline" style="background:' + color + '"></span>' +
+      c.display + '</td></tr>';
+    c.branches.forEach(function (br) {
+      if (c.branches.length > 1) {
+        html += '<tr class="branch-hdr"><td colspan="2">&nbsp;&nbsp;branch ' + br.label + '</td></tr>';
+      }
+      html += br.points
+        .map(p => '<tr><td>' + fmt(p.x) + '</td><td>' + fmt(p.y) + '</td></tr>').join('');
+    });
+  });
   tb.innerHTML = html;
+}
+
+function renderLegend(curves) {
+  const lg = document.getElementById('legend');
+  lg.innerHTML = '';
+  curves.forEach(function (c) {
+    const item = document.createElement('span');
+    item.className = 'legend-item';
+    const dot = document.createElement('span');
+    dot.className = 'color-dot';
+    dot.style.background = c.color;
+    const label = document.createElement('span');
+    label.textContent = c.display;
+    item.appendChild(dot);
+    item.appendChild(label);
+    lg.appendChild(item);
+  });
 }
 
 // Render any error value as readable text — never "[object Object]".
@@ -1093,11 +1221,12 @@ function copyLink() {
   }
 }
 
-// Collect the current formula + range inputs into a query string.
-function rangeParams(raw) {
+// Collect the formula + range inputs into a query string. Formulas become
+// repeated `formula=` params: ?formula=a&formula=b&x_min=…
+function rangeParams(formulas) {
   const v = id => document.getElementById(id).value.trim();
   const p = new URLSearchParams();
-  p.set('formula', raw);
+  formulas.forEach(function (f) { p.append('formula', f); });
   const xMin = v('xMin'), xMax = v('xMax'), xStep = v('xStep');
   if (xMin !== '') p.set('x_min', xMin);
   if (xMax !== '') p.set('x_max', xMax);
@@ -1105,10 +1234,13 @@ function rangeParams(raw) {
   return p;
 }
 
-async function plot(raw) {
+async function plot() {
   const seq = ++plotSeq;
+  const formulas = collectFormulas();
   let data = null, errMsg = null;
-  const qp = rangeParams(raw);
+  if (!formulas.length) { showError('Enter a formula first.'); document.getElementById('solved').textContent = ''; return; }
+  if (curveColors.length !== formulas.length) assignColors(formulas.length);
+  const qp = rangeParams(formulas);
   // Keep the query string in sync with the input immediately on click, so the
   // URL always reproduces what was typed (works even when the plot errors).
   try { history.replaceState(null, '', '?' + qp.toString()); } catch (e) {}
@@ -1135,15 +1267,21 @@ async function plot(raw) {
   }
 
   if (!data && !errMsg) {
-    const sol = solveEquation(raw);
-    if (sol.error) { showError(sol.error); document.getElementById('solved').textContent = ''; return; }
     const rv = id => {
       const t = document.getElementById(id).value.trim();
       return t === '' ? undefined : parseFloat(t);
     };
-    const built = buildBranches(sol, rv('xMin'), rv('xMax'), rv('xStep'));
-    if (built.error) { showError(built.error); document.getElementById('solved').textContent = ''; return; }
-    data = { display: sol.display, kind: sol.kind, x_range: built.xRange, step: built.step, branches: built.branches };
+    const curves = [];
+    let firstRange = null, firstStep = 1;
+    for (const f of formulas) {
+      const sol = solveEquation(f);
+      if (sol.error) { showError(sol.error); document.getElementById('solved').textContent = ''; return; }
+      const built = buildBranches(sol, rv('xMin'), rv('xMax'), rv('xStep'));
+      if (built.error) { showError(built.error); document.getElementById('solved').textContent = ''; return; }
+      if (!firstRange) { firstRange = built.xRange; firstStep = built.step; }
+      curves.push({ formula: f, display: sol.display, kind: sol.kind, branches: built.branches });
+    }
+    data = { formulas: formulas, x_range: firstRange, step: firstStep, curves: curves };
   }
 
   if (seq !== plotSeq) return;   // a newer plot superseded this one
@@ -1152,18 +1290,27 @@ async function plot(raw) {
   clearError();
   const rng = data.x_range;
   const stepNote = (data.step && data.step !== 1) ? (' \u00b7 step ' + data.step) : '';
-  const branchNote = data.branches.length > 1 ? (' \u00b7 ' + data.branches.length + ' branches') : '';
+  const multiNote = data.curves.length > 1 ? (' \u00b7 ' + data.curves.length + ' formulas') : '';
+  const given = data.formulas.join(' ; ');
+  const displays = data.curves.map(c => c.display).join(' ; ');
   document.getElementById('solved').textContent =
-    'Given:  ' + raw.trim() + '    \u2192    ' + errorText(data.display) +
-    '    (plotted for x = ' + rng.min + ' \u2026 ' + rng.max + stepNote + branchNote + ')';
-  lastBranches = data.branches;
+    'Given:  ' + given + '    \u2192    ' + displays +
+    '    (plotted for x = ' + rng.min + ' \u2026 ' + rng.max + stepNote + multiNote + ')';
+  const curves = data.curves.map(function (c, i) {
+    return { color: curveColors[i % curveColors.length], display: c.display, branches: c.branches };
+  });
+  lastCurves = curves;
   view = null;
-  draw(lastBranches);
-  renderTable(data.branches);
-  const nPts = data.branches.reduce((n, br) => n + br.points.length, 0);
+  draw(curves);
+  renderTable(data.curves, curveColors);
+  renderLegend(curves);
+  refreshDots();
+  const nPts = curves.reduce(function (n, c) {
+    return n + c.branches.reduce(function (m, b) { return m + b.points.length; }, 0);
+  }, 0);
   document.getElementById('meta').textContent =
     nPts + ' points \u00b7 drag to pan \u00b7 scroll / pinch to zoom \u00b7 double-click to reset';
-  pushHistory(raw.trim());
+  pushHistory(formulas[0]);
   renderHistory();
 }
 
@@ -1205,7 +1352,7 @@ function renderHistory() {
     b.title = f;
     b.addEventListener('click', function () {
       document.getElementById('formula').value = f;
-      plot(f);
+      plot();
     });
     box.appendChild(b);
   });
@@ -1236,7 +1383,11 @@ function toggleGrid() {
 function init() {
   const form = document.getElementById('form');
   const input = document.getElementById('formula');
-  form.addEventListener('submit', function (e) { e.preventDefault(); plot(input.value); });
+  form.addEventListener('submit', function (e) { e.preventDefault(); plot(); });
+  document.getElementById('addFormulaBtn').addEventListener('click', function () { addFormulaRow(); });
+  document.querySelectorAll('#formulaRows .row-del').forEach(function (b) {
+    b.addEventListener('click', function () { b.closest('.formula-row').remove(); onRowsChanged(); });
+  });
   document.getElementById('pngBtn').addEventListener('click', exportPng);
   document.getElementById('copyBtn').addEventListener('click', copyLink);
   document.getElementById('themeBtn').addEventListener('click', toggleTheme);
@@ -1251,14 +1402,15 @@ function init() {
   cv.addEventListener('dblclick', canvasDblClick);
 
   document.querySelectorAll('#chips .chip').forEach(function (ch) {
-    ch.addEventListener('click', function () { input.value = ch.textContent; plot(input.value); });
+    ch.addEventListener('click', function () { input.value = ch.textContent; plot(); });
   });
 
   let savedTheme = 'light';
   try { savedTheme = localStorage.getItem('xygh:theme') || 'light'; } catch (e) {}
   applyTheme(savedTheme === 'dark' ? 'dark' : 'light');
+  onRowsChanged();
   renderHistory();
-  plot(input.value);
+  plot();
 }
 
 if (typeof document !== 'undefined' && document.addEventListener) {

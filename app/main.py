@@ -8,33 +8,44 @@ Endpoints:
 
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from . import solver
 
-app = FastAPI(title="xy-graph-gen", version="0.4.0")
+app = FastAPI(title="xy-graph-gen", version="0.5.0")
 
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
 DEFAULT_FORMULA = "x + y = 3"
+MAX_FORMULAS = 5
+
+
+def _clean_formulas(raw: list[str]) -> list[str]:
+    """Trim + drop empties from the repeated `formula` query params."""
+    return [f.strip() for f in raw if f.strip()]
 
 
 @app.get("/", response_class=HTMLResponse)
 def index(
     request: Request,
-    formula: str = DEFAULT_FORMULA,
+    formula: list[str] = Query(default=[DEFAULT_FORMULA]),
     x_min: str | None = None,
     x_max: str | None = None,
     x_step: str | None = None,
 ) -> HTMLResponse:
-    """Render the graph page with the formula pre-filled from the query param."""
+    """Render the graph page with the formulas pre-filled from query params.
+
+    Repeated ``?formula=…&formula=…`` params pre-fill multiple formula rows
+    (capped at MAX_FORMULAS for rendering).
+    """
+    formulas = _clean_formulas(formula) or [DEFAULT_FORMULA]
     resp = templates.TemplateResponse(
         request=request,
         name="index.html",
         context={
-            "formula": formula,
+            "formulas": formulas[:MAX_FORMULAS],
             "x_min": x_min or "",
             "x_max": x_max or "",
             "x_step": x_step or "",
@@ -48,34 +59,46 @@ def index(
 
 @app.get("/api/points")
 def api_points(
-    formula: str = DEFAULT_FORMULA,
+    formula: list[str] = Query(default=[DEFAULT_FORMULA]),
     x_min: float | None = None,
     x_max: float | None = None,
     x_step: float | None = None,
 ) -> dict:
-    """Compute the points for a formula.
+    """Compute the points for one or more formulas (max MAX_FORMULAS).
 
-    Linear formulas return one branch; quadratic-in-y formulas (circles, etc.)
-    return two ("+", "−"); function formulas return one per contiguous
-    segment. ``x_min``/``x_max``/``x_step`` (step > 0 and <= 1000, fractional
-    allowed) override the range and sampling; with no explicit range, linear
-    formulas use x = 1..100, quadratic formulas derive a range from the real
-    domain, function formulas use 1..100 at a "nice" step.
+    Returns ``{"formulas", "x_range", "step", "curves": [...]}`` where each
+    curve is ``{"formula", "display", "kind", "branches": [{"label",
+    "points": [{"x","y"}, …]}, …]}``. ``x_range``/``step`` come from the
+    first curve (explicit params override the auto ranges). ``x_step`` may be
+    fractional (> 0, <= 1000). Invalid formulas (or no real points) return
+    ``400`` with a human-readable ``detail``.
     """
+    formulas = _clean_formulas(formula)
+    if not formulas:
+        raise HTTPException(status_code=400, detail="Enter a formula first.")
+    if len(formulas) > MAX_FORMULAS:
+        raise HTTPException(status_code=400, detail=f"At most {MAX_FORMULAS} formulas per graph.")
     try:
-        result = solver.generate_points(formula, x_min, x_max, x_step)
+        results = [solver.generate_points(f, x_min, x_max, x_step) for f in formulas]
     except solver.SolverError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    sol = result["solution"]
+
+    first = results[0]
     return {
-        "formula": formula,
-        "display": sol["display"],
-        "kind": sol["kind"],
-        "x_range": {"min": result["x_range"][0], "max": result["x_range"][1]},
-        "step": result["step"],
-        "branches": [
-            {"label": branch["label"], "points": [{"x": x, "y": y} for x, y in branch["points"]]}
-            for branch in result["branches"]
+        "formulas": formulas,
+        "x_range": {"min": first["x_range"][0], "max": first["x_range"][1]},
+        "step": first["step"],
+        "curves": [
+            {
+                "formula": f,
+                "display": r["solution"]["display"],
+                "kind": r["solution"]["kind"],
+                "branches": [
+                    {"label": b["label"], "points": [{"x": x, "y": y} for x, y in b["points"]]}
+                    for b in r["branches"]
+                ],
+            }
+            for f, r in zip(formulas, results)
         ],
     }
 

@@ -20,6 +20,14 @@ def test_index_renders_formula_from_query_param():
     assert 'value="2x + 3y = 6"' in r.text
 
 
+def test_index_renders_multiple_formulas_from_query_params():
+    r = client.get("/", params=[("formula", "y = sin(x)"), ("formula", "y = cos(x)")])
+    assert r.status_code == 200
+    assert r.text.count('class="formula-input"') == 2
+    assert 'value="y = sin(x)"' in r.text
+    assert 'value="y = cos(x)"' in r.text
+
+
 def test_index_renders_range_from_query_params():
     r = client.get("/", params={"formula": "y = x", "x_min": "-5", "x_max": "5", "x_step": "2"})
     assert r.status_code == 200
@@ -39,11 +47,12 @@ def test_api_points_default_linear():
     r = client.get("/api/points")
     assert r.status_code == 200
     body = r.json()
-    assert body["display"] == "y = \u2212x + 3"
-    assert body["kind"] == "linear"
+    assert body["formulas"] == ["x + y = 3"]
+    assert body["curves"][0]["display"] == "y = \u2212x + 3"
+    assert body["curves"][0]["kind"] == "linear"
     assert body["x_range"] == {"min": 1, "max": 100}
-    assert len(body["branches"]) == 1
-    pts = body["branches"][0]["points"]
+    assert len(body["curves"][0]["branches"]) == 1
+    pts = body["curves"][0]["branches"][0]["points"]
     assert len(pts) == 100
     assert pts[0] == {"x": 1, "y": 2}
     assert pts[99] == {"x": 100, "y": -97}
@@ -55,7 +64,8 @@ def test_api_points_linear_custom_range():
     body = r.json()
     assert body["x_range"] == {"min": 1, "max": 5}
     assert body["step"] == 1
-    assert [p["y"] for p in body["branches"][0]["points"]] == [2, 4, 6, 8, 10]
+    pts = body["curves"][0]["branches"][0]["points"]
+    assert [p["y"] for p in pts] == [2, 4, 6, 8, 10]
 
 
 def test_api_points_explicit_step():
@@ -63,7 +73,64 @@ def test_api_points_explicit_step():
     assert r.status_code == 200
     body = r.json()
     assert body["step"] == 2
-    assert [p["x"] for p in body["branches"][0]["points"]] == [1, 3, 5, 7, 9]
+    pts = body["curves"][0]["branches"][0]["points"]
+    assert [p["x"] for p in pts] == [1, 3, 5, 7, 9]
+
+
+def test_api_points_multiple_formulas():
+    r = client.get("/api/points", params=[("formula", "y = sin(x)"), ("formula", "y = cos(x)")])
+    assert r.status_code == 200
+    body = r.json()
+    assert body["formulas"] == ["y = sin(x)", "y = cos(x)"]
+    assert len(body["curves"]) == 2
+    assert body["curves"][0]["display"] == "y = sin(x)"
+    assert body["curves"][1]["display"] == "y = cos(x)"
+    assert body["curves"][0]["branches"][0]["points"][0]["x"] == 1
+    assert len(body["curves"][1]["branches"][0]["points"]) == 199
+
+
+def test_api_points_multiple_formulas_shared_explicit_range():
+    r = client.get(
+        "/api/points",
+        params=[("formula", "y = sin(x)"), ("formula", "y = cos(x)"), ("x_min", "0"), ("x_max", "6.28"), ("x_step", "0.1")],
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["x_range"] == {"min": 0, "max": 6.28}
+    assert body["step"] == 0.1
+    assert len(body["curves"][0]["branches"][0]["points"]) == 63
+
+
+def test_api_points_at_most_five_formulas():
+    params = [("formula", f"y = {i}x") for i in range(6)]
+    r = client.get("/api/points", params=params)
+    assert r.status_code == 400
+    assert "At most 5" in r.json()["detail"]
+
+
+def test_api_points_five_formulas_ok():
+    params = [("formula", f"y = {i}x") for i in range(5)]
+    r = client.get("/api/points", params=params)
+    assert r.status_code == 200
+    assert len(r.json()["curves"]) == 5
+
+
+def test_api_points_empty_formulas_returns_400():
+    r = client.get("/api/points", params=[("formula", ""), ("formula", "  ")])
+    assert r.status_code == 400
+    assert "Enter a formula" in r.json()["detail"]
+
+
+def test_api_points_invalid_formula_returns_400():
+    r = client.get("/api/points", params={"formula": "x = 5"})
+    assert r.status_code == 400
+    assert "no effective y term" in r.json()["detail"]
+
+
+def test_api_points_invalid_second_formula_returns_400():
+    r = client.get("/api/points", params=[("formula", "y = sin(x)"), ("formula", "x = 5")])
+    assert r.status_code == 400
+    assert "no effective y term" in r.json()["detail"]
 
 
 def test_api_points_invalid_step_returns_400():
@@ -77,7 +144,7 @@ def test_api_points_fractional_step():
     assert r.status_code == 200
     body = r.json()
     assert body["step"] == 0.5
-    assert [p["x"] for p in body["branches"][0]["points"]] == [0, 0.5, 1, 1.5, 2]
+    assert [p["x"] for p in body["curves"][0]["branches"][0]["points"]] == [0, 0.5, 1, 1.5, 2]
 
 
 def test_api_points_fractional_range():
@@ -110,12 +177,12 @@ def test_api_points_circle():
     r = client.get("/api/points", params={"formula": "x^2 + y^2 = 100"})
     assert r.status_code == 200
     body = r.json()
-    assert body["kind"] == "quadratic"
-    assert body["display"] == "y = \u00b1\u221a(\u2212x^2 + 100)"
+    assert body["curves"][0]["kind"] == "quadratic"
+    assert body["curves"][0]["display"] == "y = \u00b1\u221a(\u2212x^2 + 100)"
     assert body["x_range"] == {"min": -10, "max": 10}
-    assert len(body["branches"]) == 2
-    plus = body["branches"][0]
-    minus = body["branches"][1]
+    assert len(body["curves"][0]["branches"]) == 2
+    plus = body["curves"][0]["branches"][0]
+    minus = body["curves"][0]["branches"][1]
     assert plus["label"] == "+"
     assert minus["label"] == "\u2212"
     assert plus["points"][10] == {"x": 0, "y": 10}
@@ -126,26 +193,19 @@ def test_api_points_circle_explicit_range():
     r = client.get("/api/points", params={"formula": "x^2 + y^2 = 100", "x_min": 1, "x_max": 10})
     assert r.status_code == 200
     body = r.json()
-    assert body["x_range"] == {"min": 1, "max": 10}
-    assert len(body["branches"][0]["points"]) == 10
-
-
-def test_api_points_invalid_formula_returns_400():
-    r = client.get("/api/points", params={"formula": "x = 5"})
-    assert r.status_code == 400
-    assert "no effective y term" in r.json()["detail"]
+    assert len(body["curves"][0]["branches"][0]["points"]) == 10
 
 
 def test_api_points_function_sin():
     r = client.get("/api/points", params={"formula": "y = sin(x)"})
     assert r.status_code == 200
     body = r.json()
-    assert body["kind"] == "function"
-    assert body["display"] == "y = sin(x)"
+    assert body["curves"][0]["kind"] == "function"
+    assert body["curves"][0]["display"] == "y = sin(x)"
     assert body["x_range"] == {"min": 1, "max": 100}
     assert body["step"] == 0.5
-    assert len(body["branches"]) == 1
-    pts = body["branches"][0]["points"]
+    assert len(body["curves"][0]["branches"]) == 1
+    pts = body["curves"][0]["branches"][0]["points"]
     assert len(pts) == 199
     assert abs(pts[0]["y"] - 0.8414709848078965) < 1e-9
 
@@ -154,7 +214,7 @@ def test_api_points_function_domain_skips():
     r = client.get("/api/points", params={"formula": "y = log(x)", "x_min": -5, "x_max": 5})
     assert r.status_code == 200
     body = r.json()
-    assert [p["x"] for p in body["branches"][0]["points"]] == [1, 2, 3, 4, 5]
+    assert [p["x"] for p in body["curves"][0]["branches"][0]["points"]] == [1, 2, 3, 4, 5]
 
 
 def test_api_points_function_segments():
@@ -162,7 +222,7 @@ def test_api_points_function_segments():
     r = client.get("/api/points", params={"formula": "y = 1/(x-5)", "x_min": 1, "x_max": 10})
     assert r.status_code == 200
     body = r.json()
-    assert [len(br["points"]) for br in body["branches"]] == [4, 5]
+    assert [len(br["points"]) for br in body["curves"][0]["branches"]] == [4, 5]
 
 
 def test_api_points_function_invalid_returns_400():

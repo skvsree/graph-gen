@@ -157,7 +157,7 @@ P3 = bigger / probably not worth it.
 - [x] General functions: `sin`, `cos`, `tan`, `log`, `sqrt`, `exp`, `abs` (real grapher territory)
 - [x] Multiple formulas on one graph with legend (batch `/api/points` or comma-separated input)
 - [x] Polar mode in a second tab (`?mode=polar&formula=r+%3D+2%CE%B8`; `r = f(θ)` with `θ`/`theta` for the angle, `x_min`/`x_max`/`x_step` bound θ; the points table shows θ and r in polar mode)
-- [x] History & samples toggles — hide/show the history chips and points table; each tab keeps its own history ring and toggle preferences (`xygh:history:cartesian` / `xygh:history:polar`)
+- [x] History & samples in collapsible accordions (closed by default; open/closed state remembered per tab — `xygh:open:history:cartesian` / `xygh:open:samples:polar`, etc.)
 - [ ] Derivative + tangent lines (symbolic for polynomials — cheap: differentiate the coefficient map)
 - [ ] Intersection points between curves (solve linear/quadratic pairs symbolically)
 - [x] Zoom & pan on the canvas (drag to pan, wheel to zoom)

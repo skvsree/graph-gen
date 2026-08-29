@@ -97,9 +97,19 @@
   .graphbox { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
   canvas { width: 100%; height: auto; display: block; cursor: grab; touch-action: none; }
   .meta { font-size: 12.5px; color: var(--muted); margin-top: 8px; }
-  .tablebox { margin-top: 16px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
-  .tablebox h2 { font-size: 14px; margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--fg-soft); }
   .table-scroll { max-height: 220px; overflow: auto; }
+  .accordion {
+    border: 1px solid var(--border); border-radius: 12px; background: var(--card);
+    margin-top: 14px; overflow: hidden;
+  }
+  .accordion summary {
+    cursor: pointer; padding: 10px 14px; font-weight: 600; font-size: 14px;
+    color: var(--fg-soft); list-style: none; user-select: none;
+  }
+  .accordion summary::-webkit-details-marker { display: none; }
+  .accordion summary::before { content: '\u25b8 '; }
+  .accordion[open] summary::before { content: '\u25be '; }
+  .accordion .chips, .accordion .table-scroll { margin: 0 14px 12px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; font-family: ui-monospace, Consolas, monospace; }
   th, td { padding: 5px 14px; text-align: right; border-bottom: 1px solid var(--row-border); color: var(--fg); }
   th { position: sticky; top: 0; background: var(--bg); color: var(--muted); }
@@ -149,8 +159,6 @@
     <button type="button" class="btn-secondary" id="copyBtn" title="Copy a shareable link to this graph">Copy link</button>
     <button type="button" class="btn-secondary" id="themeBtn" title="Toggle dark / light theme">🌙 Dark</button>
     <button type="button" class="btn-secondary" id="gridBtn" title="Toggle grid lines">Grid: on</button>
-    <button type="button" class="btn-secondary" id="histToggleBtn" title="Show / hide formula history">History: on</button>
-    <button type="button" class="btn-secondary" id="samplesToggleBtn" title="Show / hide the points table">Samples: on</button>
   </form>
 
   <div class="chips" id="chips">
@@ -175,7 +183,10 @@
     <button class="chip" type="button">r = sin(θ)</button>
   </div>
 
-  <div class="chips" id="history" style="display:none"></div>
+  <details class="accordion" id="historyAccordion">
+    <summary>History</summary>
+    <div class="chips" id="history" style="display:none"></div>
+  </details>
 
   <p id="solved"></p>
   <div id="error"></div>
@@ -187,15 +198,15 @@
     <div class="meta" id="meta"></div>
   </div>
 
-  <div class="tablebox">
-    <h2>Points</h2>
+  <details class="accordion" id="samplesAccordion">
+    <summary>Samples</summary>
     <div class="table-scroll">
       <table>
         <thead><tr><th id="colX">x</th><th id="colY">y</th></tr></thead>
         <tbody id="points"></tbody>
       </table>
     </div>
-  </div>
+  </details>
 </div>
 
 <script>
@@ -1171,7 +1182,7 @@ function setMode(m) {
   mode = m;
   applyModeUI();
   renderHistory();   // this tab's own history ring
-  applyShowState();  // this tab's own toggle preferences
+  applyAccordions(); // this tab's own accordion preferences
   plot();
 }
 
@@ -1464,7 +1475,7 @@ function renderHistory() {
   const box = document.getElementById('history');
   const arr = loadHistory();
   box.innerHTML = '';
-  if (!arr.length || showPref('history') !== 'on') { box.style.display = 'none'; return; }
+  if (!arr.length) { box.style.display = 'none'; return; }
   box.style.display = 'flex';
   const label = document.createElement('span');
   label.className = 'range-label';
@@ -1491,31 +1502,21 @@ function renderHistory() {
   box.appendChild(clear);
 }
 
-/* ================= theme / grid / history / samples toggles ================= */
+/* ================= theme / grid toggles ================= */
 
-// Per-mode show/hide state for the history chips and the samples table, so
-// each tab remembers its own preferences (key includes the current mode).
-function showKey(kind) {
-  return 'xygh:show:' + kind + ':' + (mode === 'polar' ? 'polar' : 'cartesian');
+// History and Samples live in <details> accordions, closed by default.
+// Open/closed state is remembered per mode (each tab keeps its own).
+function accordionKey(kind) {
+  return 'xygh:open:' + kind + ':' + (mode === 'polar' ? 'polar' : 'cartesian');
 }
-function showPref(kind) {
-  try {
-    const v = localStorage.getItem(showKey(kind));
-    return v === null ? 'on' : v;
-  } catch (e) { return 'on'; }
-}
-function applyShowState() {
-  const h = showPref('history') === 'on';
-  const s = showPref('samples') === 'on';
-  document.getElementById('histToggleBtn').textContent = h ? 'History: on' : 'History: off';
-  document.getElementById('samplesToggleBtn').textContent = s ? 'Samples: on' : 'Samples: off';
-  document.querySelector('.tablebox').style.display = s ? '' : 'none';
-  renderHistory();
-}
-function toggleShow(kind) {
-  const nv = showPref(kind) === 'on' ? 'off' : 'on';
-  try { localStorage.setItem(showKey(kind), nv); } catch (e) {}
-  applyShowState();
+function applyAccordions() {
+  ['history', 'samples'].forEach(function (kind) {
+    const el = document.getElementById(kind + 'Accordion');
+    if (!el) return;
+    let state = 'closed';
+    try { state = localStorage.getItem(accordionKey(kind)) || 'closed'; } catch (e) {}
+    el.open = state === 'open';
+  });
 }
 
 function applyTheme(t) {
@@ -1549,8 +1550,12 @@ function init() {
   document.getElementById('copyBtn').addEventListener('click', copyLink);
   document.getElementById('themeBtn').addEventListener('click', toggleTheme);
   document.getElementById('gridBtn').addEventListener('click', toggleGrid);
-  document.getElementById('histToggleBtn').addEventListener('click', function () { toggleShow('history'); });
-  document.getElementById('samplesToggleBtn').addEventListener('click', function () { toggleShow('samples'); });
+  ['history', 'samples'].forEach(function (kind) {
+    const el = document.getElementById(kind + 'Accordion');
+    el.addEventListener('toggle', function () {
+      try { localStorage.setItem(accordionKey(kind), el.open ? 'open' : 'closed'); } catch (e) {}
+    });
+  });
 
   const cv = document.getElementById('graph');
   cv.addEventListener('pointerdown', canvasPointerDown);
@@ -1573,7 +1578,7 @@ function init() {
   applyModeUI();
   onRowsChanged();
   renderHistory();
-  applyShowState();
+  applyAccordions();
   plot();
 }
 

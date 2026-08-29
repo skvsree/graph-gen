@@ -20,12 +20,13 @@ to reset**. A theme toggle (dark/light, persisted) and a grid on/off toggle sit
 next to the plot button, and every successful plot is remembered in a
 localStorage history row (last 12, click a chip to re-plot, ✕ clear).
 
-**Plot up to 5 formulas at once** ("+ Add formula" adds an input row). Each
-line gets a distinct colour (randomly chosen per graph from a palette — never
-two lines the same), a legend renders above the graph, and the points table is
-grouped per formula. The shareable URL carries the formulas as repeated
-`formula=` params: `/?formula=y%3Dsin(x)&formula=y%3Dcos(x)&x_min=0&x_max=6.28`.
-One shared x-range/step applies to all curves.
+**Plot up to 5 formulas at once** ("+ Add formula" adds an input row). Lines
+get **fixed colours by index** — red, green, blue, cyan, teal — so curve 1 is
+always red, curve 2 always green, and so on. A legend renders above the graph,
+and the points table is grouped per formula. The shareable URL carries the
+formulas as repeated `formula=` params:
+`/?formula=y%3Dsin(x)&formula=y%3Dcos(x)&x_min=0&x_max=6.28`. One shared
+x-range/step applies to all curves.
 
 FastAPI + Jinja2 + vanilla JS. The page plots from the server-side solver
 (`/api/points`) and falls back to a built-in client-side solver if the API is

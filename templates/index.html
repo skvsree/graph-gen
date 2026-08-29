@@ -1042,22 +1042,12 @@ function canvasDblClick() { view = null; redraw(); }
 
 /* ================= multi-formula state & colours ================= */
 
-// Distinct palette; each plot shuffles it and takes one colour per formula,
-// so lines are always unique (and random-looking) within a graph.
-const CURVE_PALETTE = ['#2563eb', '#0d9488', '#d97706', '#dc2626', '#7c3aed',
-  '#0891b2', '#ca8a04', '#db2777', '#16a34a', '#ea580c', '#4f46e5', '#059669'];
+// Fixed line colours, one per formula (max 5), assigned by index.
+const CURVE_PALETTE = ['#dc2626', '#16a34a', '#2563eb', '#0891b2', '#0d9488'];
 let curveColors = [];
 
-function shuffle(arr) {
-  const a = arr.slice();
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    const t = a[i]; a[i] = a[j]; a[j] = t;
-  }
-  return a;
-}
 function assignColors(n) {
-  curveColors = shuffle(CURVE_PALETTE).slice(0, n);
+  curveColors = CURVE_PALETTE.slice(0, n);
 }
 
 // Non-empty, deduped list of formulas from the input rows (max 5 rows in UI).

@@ -30,7 +30,7 @@ def index(
     x_step: str | None = None,
 ) -> HTMLResponse:
     """Render the graph page with the formula pre-filled from the query param."""
-    return templates.TemplateResponse(
+    resp = templates.TemplateResponse(
         request=request,
         name="index.html",
         context={
@@ -40,6 +40,10 @@ def index(
             "x_step": x_step or "",
         },
     )
+    # The template changes often during development; never let a browser or
+    # proxy serve a stale copy of the page (the JS solver must match the API).
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.get("/api/points")

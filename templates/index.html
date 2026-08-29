@@ -1022,10 +1022,27 @@ function renderTable(branches) {
   tb.innerHTML = html;
 }
 
+// Render any error value as readable text — never "[object Object]".
+function errorText(msg) {
+  if (typeof msg === 'string') return msg;
+  if (msg && typeof msg === 'object') {
+    try { return JSON.stringify(msg); } catch (e) { /* fall through */ }
+  }
+  return String(msg);
+}
+
 function showError(msg) {
   const el = document.getElementById('error');
-  el.textContent = msg;
+  el.textContent = errorText(msg);
   el.style.display = 'block';
+}
+
+// Safety net: surface any uncaught script error in the error box so problems
+// are reported with their real message instead of failing silently.
+if (typeof window !== 'undefined' && window.addEventListener) {
+  window.addEventListener('error', function (e) {
+    showError('Script error: ' + ((e && e.message) ? e.message : 'unknown'));
+  });
 }
 
 function clearError() {
@@ -1120,7 +1137,7 @@ async function plot(raw) {
   const stepNote = (data.step && data.step !== 1) ? (' \u00b7 step ' + data.step) : '';
   const branchNote = data.branches.length > 1 ? (' \u00b7 ' + data.branches.length + ' branches') : '';
   document.getElementById('solved').textContent =
-    'Given:  ' + raw.trim() + '    \u2192    ' + data.display +
+    'Given:  ' + raw.trim() + '    \u2192    ' + errorText(data.display) +
     '    (plotted for x = ' + rng.min + ' \u2026 ' + rng.max + stepNote + branchNote + ')';
   lastBranches = data.branches;
   view = null;

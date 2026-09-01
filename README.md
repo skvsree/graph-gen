@@ -47,9 +47,11 @@ Open http://127.0.0.1:8123
 
 | Endpoint | Description |
 |---|---|
-| `GET /` | Renders the graph page. The formula is a query param: `/?formula=x%20%2B%20y%20%3D%203`. The page keeps the URL in sync (`?formula=…`) as you plot, so links are shareable. `?mode=polar` opens the polar tab (default `cartesian`). |
-| `GET /api/points?mode=…&formula=…&formula=…&x_min=…&x_max=…&x_step=…` | Solves one or more formulas (max 5, repeated `formula=` params) and returns the curves as JSON: `{"mode", "formulas", "x_range": {"min","max"}, "step", "curves": [{"formula", "display", "kind", "branches": [{"label","points": [{"x","y"}, …]}, …]}, …]}`. `mode` is `cartesian` (default) or `polar`. Linear formulas return one branch, quadratic-in-`y` two ("+", "−"), function formulas one per contiguous segment. Polar points also carry `theta` and `r` (`{"x","y","theta","r"}`) so the table can show θ/r. `x_min`/`x_max`/`x_step` (fractions allowed; step must be > 0 and ≤ 1000; both range bounds required together) override the default range and sampling — e.g. `x_step=0.1` for a smooth trig curve. In polar mode they bound θ. Invalid formulas (or no real points) return `400` with a human-readable `detail`. |
-| `GET /health` | Liveness probe: `{"status": "ok", "app": "xy-graph-gen"}` |
+| `GET /` | Renders the graph page. The formula is a query param: `/?formula=x%20%2B%20y%20%3D%203`. The page keeps the URL in sync (`?formula=…`) as you plot, so links are shareable. `?mode=polar` opens the polar tab (default `cartesian`). The page footer shows a **hit counter** (`Hits: N` — page renders since the process started, refreshed from `/api/hits` every 30s). |
+| `GET /api/points?mode=…&formula=…&formula=…&x_min=…&x_max=…&x_step=…` | Solves one or more formulas (max 5, repeated `formula=` params) and returns the curves as JSON: `{"mode", "formulas", "x_range": {"min","max"}, "step", "curves": [{"formula", "display", "kind", "branches": [{"label","points": [{"x","y"}, …]}, …]}, …]}`. `mode` is `cartesian` (default) or `polar`. Linear formulas return one branch, quadratic-in-`y` two ("+", "−"), function formulas one per contiguous segment, implicit curves one per contour polyline. Inequality curves additionally carry `"inequality": {"op", "side"}` (side ∈ above/below/between/outside). Polar points also carry `theta` and `r` (`{"x","y","theta","r"}`) so the table can show θ/r. `x_min`/`x_max`/`x_step` (fractions allowed; step must be > 0 and ≤ 1000; both range bounds required together) override the default range and sampling — e.g. `x_step=0.1` for a smooth trig curve. In polar mode they bound θ; for implicit curves they size the sampling window. Responses are cached in-process for 60s (`X-Cache: HIT/MISS` header). Invalid formulas (or no real points) return `400` with a human-readable `detail`. |
+| `GET /api/hits` | Page hit count since process start: `{"hits": N}`. |
+| `GET /metrics` | Prometheus-text counters: requests by method/path/status, durations, `/api/points` cache hits/misses, uptime. |
+| `GET /health` | Liveness probe: `{"status": "ok", "app": "xy-graph-gen", "version": …, "uptime_s": …}` |
 
 ## Supported input
 
@@ -70,6 +72,12 @@ Any linear equation, and simple polynomials in `x` (linear in `y`):
 | `2y = sin(x)`     | `y = sin(x) / 2` — any equation linear in y |
 | `sin(x) + y = 3`  | `y = 3 − sin(x)` |
 | `y = (x+1)^2`     | `y = (x + 1)^2` — parentheses work in function form |
+| `x^2 + y^3 = 7`   | **Implicit curve** — F(x,y) = 0 grid-sampled over a square window (default x,y ∈ −10…10) |
+| `x*y = 4`         | **Implicit curve** — hyperbola (grid-sampled contour) |
+| `x^3 + y^3 = 6xy` | **Implicit curve** — folium of Descartes |
+| `x = 5`           | **Implicit curve** — vertical line (previously an error) |
+| `y > 2x + 1`      | **Inequality** — boundary `y = 2x + 1` drawn and the region above it shaded |
+| `x^2 + y^2 < 25`  | **Inequality** — circle boundary, interior shaded ("between") |
 | `r = 2θ` (polar tab) | `r = 2θ` — Archimedean spiral; points are (r·cos θ, r·sin θ), default θ = 0…4π |
 | `r = cos(2θ)` (polar tab) | `r = cos(2θ)` — four-petal rose |
 | `r = 2/θ` (polar tab) | `r = 2 / θ` — hyperbolic spiral; θ = 0 skipped |
@@ -93,16 +101,25 @@ Any linear equation, and simple polynomials in `x` (linear in `y`):
   (e.g. `r = 2θ`, `r = 3*sin(2θ)`, `r = e^(θ/10)`). `x_min`/`x_max`/`x_step`
   bound θ in this mode; the default range is θ = 0…4π at a "nice" step.
   Points map to the plane as (r·cos θ, r·sin θ) with signed r.
-- Everything else (plain polynomials) uses the term solver, which still
-  rejects parentheses — parenthesised formulas that are not linear in `y`
-  (e.g. `(x+1)^2 + y^2 = 100`) error with "Parentheses are not supported
-  yet."
+- **Implicit curves** (`P3`): when the equation cannot be solved for `y`
+  (e.g. `x^2 + y^3 = 7`, `x*y = 4`, `sin(x) + sin(y) = 1`, `x^3 + y^3 = 6xy`,
+  `x = 5`), it is treated as `F(x, y) = 0` and rendered by **grid sampling
+  + marching squares** over a square window (default x,y ∈ −10…10;
+  `x_min`/`x_max` size the window, the y span mirrors it). This also makes
+  parenthesised non-linear equations like `(x+1)^2 + y^2 = 100` plottable.
+  Multi-letter variable products (`xy` → `x*y`) are supported.
+- **Inequalities** (`P3`): `>`, `>=`, `<`, `<=` — the boundary equation is
+  solved normally and the region on the satisfying side is shaded with a
+  translucent tint: above/below for single-boundary curves, between/outside
+  for two-branch quadratics (e.g. `x^2 + y^2 < 25` shades the disc
+  interior). `=` may not be mixed with a comparison operator; implicit
+  boundaries are not shadable. Polar mode rejects inequalities.
 
 ## Project layout
 
 ```
 app/
-  main.py        FastAPI app (/, /api/points, /health)
+  main.py        FastAPI app (/, /api/points, /api/hits, /metrics, /health)
   solver.py      server-side equation solver (pure Python, no deps)
 templates/
   index.html     the graph page (client solver kept as offline fallback)
@@ -166,7 +183,7 @@ P3 = bigger / probably not worth it.
 - [x] Dark mode / grid toggle
 
 ### P3 — bigger / probably not
-- [ ] General implicit curves (grid sampling / contour rendering — different plotter)
-- [ ] Inequality shading (`y > 2x + 1`)
+- [x] General implicit curves (grid sampling / contour rendering — different plotter)
+- [x] Inequality shading (`y > 2x + 1`)
 - [ ] Docker packaging (already on systemd + Caddy)
-- [ ] Caching / observability (premature for a single-user service)
+- [x] Caching / observability (in-process TTL cache on `/api/points` + `X-Cache` header, `/metrics` Prometheus counters, page hit counter in the footer)

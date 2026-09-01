@@ -158,10 +158,7 @@ def test_quadratic_no_real_points_in_explicit_range():
 @pytest.mark.parametrize(
     "raw,needle",
     [
-        ("x = 5", "no effective y term"),
         ("x + y = 3 = 4", 'Only one "="'),
-        ("(x+1)^2 + y^2 = 100", "Parentheses"),  # parens only work in y = f(x) form
-        ("y^3 = x", "linear or quadratic in y"),
         ("x = ", "Both sides"),
         ("= 3", "Both sides"),
         ("y = @#$", "Cannot understand"),
@@ -172,6 +169,67 @@ def test_solve_errors(raw, needle):
     with pytest.raises(solver.SolverError) as exc:
         solver.solve_equation(raw)
     assert needle in str(exc.value)
+
+
+# --- P3-1: implicit curves (F(x, y) = 0 via grid sampling) ---
+@pytest.mark.parametrize(
+    "raw,display",
+    [
+        ("x = 5", "x = 5"),                    # vertical line
+        ("y^3 = x", "y^3 = x"),                # cubic — not solvable for y
+        ("(x+1)^2 + y^2 = 100", "(x+1)^2+y^2 = 100"),  # shifted circle
+        ("x^2 + y^3 = 7", "x^2+y^3 = 7"),
+        ("x*y = 4", "x*y = 4"),                # hyperbola
+        ("x^3 + y^3 = 6xy", "x^3+y^3 = 6xy"),  # folium of Descartes
+        ("sin(x) + sin(y) = 1", "sin(x)+sin(y) = 1"),
+    ],
+)
+def test_implicit_solve(raw, display):
+    sol = solver.solve_equation(raw)
+    assert sol["kind"] == "implicit"
+    assert sol["display"] == display
+    assert solver._has_var(sol["expr"])
+
+
+def test_implicit_generate_points_contours():
+    r = solver.generate_points("x^2 + y^3 = 7")
+    assert r["solution"]["kind"] == "implicit"
+    assert r["x_range"] == (-10.0, 10.0)  # default square window
+    assert len(r["branches"]) >= 1
+    total = sum(len(b["points"]) for b in r["branches"])
+    assert 50 < total < 20000
+
+
+def test_implicit_vertical_line_x_equals_5():
+    r = solver.generate_points("x = 5")
+    xs = {p[0] for b in r["branches"] for p in b["points"]}
+    assert all(abs(x - 5) < 0.05 for x in xs)  # all points on x = 5
+    ys = [p[1] for b in r["branches"] for p in b["points"]]
+    assert min(ys) < -9 and max(ys) > 9  # full height of the window
+
+
+def test_implicit_points_lie_on_curve():
+    r = solver.generate_points("x*y = 4")
+    F = r["solution"]["expr"]
+    for b in r["branches"]:
+        for (x, y) in b["points"]:
+            assert abs(solver.eval_ast2(F, x, y)) < 0.1  # F ≈ 0 everywhere
+
+
+def test_implicit_constant_equation_still_errors():
+    with pytest.raises(solver.SolverError, match="no effective y term"):
+        solver.solve_equation("5 = 5")
+
+
+def test_implicit_explicit_window():
+    r = solver.generate_points("x^2 + y^3 = 7", x_min=-5, x_max=5, x_step=0.2)
+    assert r["x_range"] == (-5.0, 5.0)
+    assert r["solution"]["kind"] == "implicit"
+
+
+def test_implicit_no_points_errors():
+    with pytest.raises(solver.SolverError, match="No real points"):
+        solver.generate_points("x^2 + y^4 = -3")  # no real solutions → implicit path
 
 
 def test_custom_range_linear():
@@ -331,18 +389,53 @@ def test_function_step_respected():
 @pytest.mark.parametrize(
     "raw,needle",
     [
-        ("y = sin(y)", "y' appears inside a function"),
         ("y = foo(x)", "Unknown function"),
         ("y = (bar)", "Unknown symbol"),
         ("y = (2 + * 3)", "Unexpected"),
         ("y = sin(x+", "Unexpected end of formula"),
-        ("y + sin(x) = y + 2", "no effective y term"),
     ],
 )
 def test_function_errors(raw, needle):
     with pytest.raises(solver.SolverError) as exc:
         solver.solve_equation(raw)
     assert needle in str(exc.value)
+
+
+# --- P3-2: inequality shading ---
+@pytest.mark.parametrize(
+    "raw,kind,op,side",
+    [
+        ("y > 2x + 1", "linear", ">", "above"),
+        ("y < 2x + 1", "linear", "<", "below"),
+        ("2x + 1 < y", "linear", "<", "above"),   # op flipped, still above
+        ("y >= 2x+1", "linear", ">=", "above"),
+        ("y <= x^2", "linear", "<=", "below"),
+        ("x^2 + y^2 < 25", "quadratic", "<", "between"),   # inside circle
+        ("x^2 + y^2 > 25", "quadratic", ">", "outside"),   # outside circle
+        ("y^2 > x", "quadratic", ">", "outside"),
+        ("y > sin(x)", "function", ">", "above"),
+        ("y < sin(x)", "function", "<", "below"),
+    ],
+)
+def test_inequality_solve_and_side(raw, kind, op, side):
+    sol = solver.solve_equation(raw)
+    assert sol["kind"] == kind
+    assert sol["inequality"]["op"] == op
+    r = solver.generate_points(raw)
+    assert r["solution"]["inequality"]["side"] == side
+
+
+def test_inequality_error_cases():
+    with pytest.raises(solver.SolverError, match="Only one inequality"):
+        solver.solve_equation("y > 2x + 1 < 3")
+    with pytest.raises(solver.SolverError, match="Mixing '='"):
+        solver.solve_equation("y = 2x + 1 > 3")
+    with pytest.raises(solver.SolverError, match="Both sides of the inequality"):
+        solver.solve_equation("y >")
+    with pytest.raises(solver.SolverError, match="solvable for y"):
+        solver.solve_equation("x^2 + y^3 > 7")  # implicit boundary unsupported
+    with pytest.raises(solver.SolverError, match="not supported in polar"):
+        solver.generate_points("r > 2", mode="polar")
 
 
 def test_function_range_caps_still_apply():

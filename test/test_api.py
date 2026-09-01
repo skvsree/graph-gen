@@ -185,15 +185,98 @@ def test_api_points_empty_formulas_returns_400():
 
 
 def test_api_points_invalid_formula_returns_400():
-    r = client.get("/api/points", params={"formula": "x = 5"})
+    r = client.get("/api/points", params={"formula": "5 = 5"})
     assert r.status_code == 400
     assert "no effective y term" in r.json()["detail"]
 
 
 def test_api_points_invalid_second_formula_returns_400():
-    r = client.get("/api/points", params=[("formula", "y = sin(x)"), ("formula", "x = 5")])
+    r = client.get("/api/points", params=[("formula", "y = sin(x)"), ("formula", "5 = 5")])
     assert r.status_code == 400
     assert "no effective y term" in r.json()["detail"]
+
+
+def test_api_points_implicit_curve():
+    r = client.get("/api/points", params={"formula": "x^2 + y^3 = 7"})
+    assert r.status_code == 200
+    body = r.json()
+    curve = body["curves"][0]
+    assert curve["kind"] == "implicit"
+    assert curve["display"] == "x^2+y^3 = 7"
+    assert body["x_range"] == {"min": -10.0, "max": 10.0}
+    assert len(curve["branches"]) >= 1
+    assert len(curve["branches"][0]["points"]) > 50
+
+
+def test_api_points_inequality_curve():
+    r = client.get("/api/points", params={"formula": "y > 2x + 1"})
+    assert r.status_code == 200
+    curve = r.json()["curves"][0]
+    assert curve["kind"] == "linear"
+    assert curve["inequality"] == {"op": ">", "side": "above"}
+    assert len(curve["branches"][0]["points"]) == 100
+
+
+def test_api_points_inequality_quadratic_between():
+    r = client.get("/api/points", params={"formula": "x^2 + y^2 < 25"})
+    assert r.status_code == 200
+    curve = r.json()["curves"][0]
+    assert curve["inequality"] == {"op": "<", "side": "between"}
+
+
+def test_api_points_implicit_invalid_returns_400():
+    r = client.get("/api/points", params={"formula": "x^2 + y^4 = -3"})
+    assert r.status_code == 400
+    assert "No real points" in r.json()["detail"]
+
+
+def test_api_points_inequality_implicit_boundary_returns_400():
+    r = client.get("/api/points", params={"formula": "x^2 + y^3 > 7"})
+    assert r.status_code == 400
+    assert "solvable for y" in r.json()["detail"]
+
+
+def test_api_points_cache_hit_returns_same_payload():
+    params = {"formula": "y = 7x - 3"}  # unique key — nothing else warms it
+    first = client.get("/api/points", params=params)
+    second = client.get("/api/points", params=params)
+    assert first.status_code == 200 and second.status_code == 200
+    assert first.headers.get("x-cache") == "MISS"
+    assert second.headers.get("x-cache") == "HIT"
+    assert first.json() == second.json()
+
+
+def test_api_points_different_formulas_not_cached_together():
+    a = client.get("/api/points", params={"formula": "y = 8x - 3"})
+    b = client.get("/api/points", params={"formula": "y = 8x - 4"})
+    assert a.headers.get("x-cache") == "MISS"
+    assert b.headers.get("x-cache") == "MISS"
+
+
+def test_metrics_endpoint():
+    r = client.get("/metrics")
+    assert r.status_code == 200
+    assert "xy_requests_total" in r.text
+    assert 'path="/api/points"' in r.text
+    assert "xy_uptime_seconds" in r.text
+
+
+def test_health_reports_version_and_uptime():
+    r = client.get("/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["version"] == "0.6.0"
+    assert body["uptime_s"] >= 0
+
+
+def test_api_hits_counts_page_renders():
+    before = client.get("/api/hits").json()["hits"]
+    r = client.get("/")
+    assert r.status_code == 200
+    assert f"Hits: {before + 1}" in r.text  # footer shows the incremented count
+    after = client.get("/api/hits").json()["hits"]
+    assert after == before + 1
 
 
 def test_api_points_invalid_step_returns_400():
@@ -289,9 +372,6 @@ def test_api_points_function_segments():
 
 
 def test_api_points_function_invalid_returns_400():
-    r = client.get("/api/points", params={"formula": "y = sin(y)"})
-    assert r.status_code == 400
-    assert "inside a function" in r.json()["detail"]
     r = client.get("/api/points", params={"formula": "y = foo(x)"})
     assert r.status_code == 400
     assert "Unknown function" in r.json()["detail"]

@@ -97,6 +97,13 @@
   .graphbox { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
   canvas { width: 100%; height: auto; display: block; cursor: grab; touch-action: none; }
   .meta { font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+  .footer {
+    margin-top: 16px; padding-top: 12px;
+    border-top: 1px solid var(--border);
+    font-size: 12.5px; color: var(--muted);
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  }
+  .footer .hits { font-family: ui-monospace, Consolas, monospace; }
   .table-scroll { max-height: 220px; overflow: auto; }
   .tablebox { margin-top: 16px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
   .tablebox h2 { font-size: 14px; margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--fg-soft); }
@@ -215,6 +222,10 @@
       </table>
     </div>
   </div>
+
+  <div class="footer" id="footer">
+    <span class="hits" id="hits">Hits: {{ page_hits }}</span>
+  </div>
 </div>
 
 <script>
@@ -312,8 +323,13 @@ function polyStr(poly) {
    {t:'b',op,l,r} {t:'pow',l,r}.                                      */
 
 const FUNCTIONS = ['sin', 'cos', 'tan', 'log', 'ln', 'sqrt', 'exp', 'abs'];
+const KNOWN_NAMES = new Set([...FUNCTIONS, 'pi', 'theta', 'e']);
 const FUNC_RE = /[()]|(?:sin|cos|tan|log|ln|sqrt|exp|abs)\(|(?<![a-zA-Z])e(?![a-zA-Z])|pi/;
 const FUNCTION_Y_LIMIT = 1e6;
+const INEQ_RE = />=|<=|>|</;
+// Implicit-curve constants (mirror app/solver.py)
+const IMPLICIT_MIN = -10, IMPLICIT_MAX = 10, IMPLICIT_GRID = 150, IMPLICIT_GRID_MAX = 250;
+const MAX_IMPLICIT_POINTS = 20000;
 
 function exprValueEnd(tok) {
   return tok.t === 'num' || (tok.t === 'name' && (tok.n === 'x' || tok.n === 'y')) ||
@@ -342,7 +358,15 @@ function exprTokenize(s) {
     if (/[a-zA-Z\u03b8]/.test(c)) {
       let j = i;
       while (j < s.length && /[a-zA-Z\u03b8]/.test(s[j])) j++;
-      tokens.push({ t: 'name', n: s.slice(i, j) });
+      const name = s.slice(i, j);
+      if (!KNOWN_NAMES.has(name) && name.split('').every(ch => ch === 'x' || ch === 'y')) {
+        // "xy" -> x*y, "xx" -> x*x (implicit multiplication of single-letter
+        // variables); multi-letter names that are not functions/constants
+        // stay whole (so "foo" still errors as an unknown symbol).
+        for (const ch of name) tokens.push({ t: 'name', n: ch });
+      } else {
+        tokens.push({ t: 'name', n: name });
+      }
       i = j;
       continue;
     }
@@ -669,19 +693,25 @@ function solveFunctional(lhsStr, rhsStr, polar) {
 // Linear in y -> { kind:'linear', a:0, b, denom, poly, display }
 // Quadratic in y (a·y² + b·y = R(x)) -> { kind:'quadratic', a, b, poly, display }
 // y = f(x) with functions/parens -> { kind:'function', expr, b, display }
+// F(x, y) = 0 implicit curve -> { kind:'implicit', expr, display }
+// Inequality "lhs op rhs" -> boundary solution + { inequality: {op, lhs, rhs} }
 // polar=true: r = f(θ) -> { kind:'polar', expr, b, display }
 // Returns { error } on failure.
 function solveEquation(raw, polar) {
   let s = String(raw).replace(/\s+/g, '').replace(/\u2212/g, '-');
   if (!s) return { error: 'Enter a formula first.' };
 
-  let lhsStr, rhsStr;
+  if (!polar) {
+    const m = s.match(INEQ_RE);
+    if (m) return solveInequality(s, m[0], m.index, m.index + m[0].length);
+  }
+
+  let lhsStr, rhsStr, bare;
   const eq = s.indexOf('=');
-  if (eq === -1) { lhsStr = 'y'; rhsStr = s; }
+  if (eq === -1) { lhsStr = 'y'; rhsStr = s; bare = true; }
   else {
     if (s.indexOf('=', eq + 1) !== -1) return { error: 'Only one "=" allowed.' };
-    lhsStr = s.slice(0, eq);
-    rhsStr = s.slice(eq + 1);
+    lhsStr = s.slice(0, eq); rhsStr = s.slice(eq + 1); bare = false;
   }
   if (!lhsStr || !rhsStr) return { error: 'Both sides of "=" must have content.' };
 
@@ -692,9 +722,75 @@ function solveEquation(raw, polar) {
   }
   if (FUNC_RE.test(s)) {
     const r = solveFunctional(lhsStr, rhsStr, false);
-    if (r) return r;
+    if (r && !r.error) return r;
+    if (r && r.error) {
+      // e.g. 'y' inside a function — the equation may still be a plottable
+      // implicit curve; if not, preserve the functional error exactly
+      // (parity with the Python solver, which raises from this path).
+      const imp = tryImplicit(lhsStr, rhsStr, bare);
+      if (imp) return imp;
+      return r;
+    }
+    // r === null → non-linear in y → fall through to the polynomial solver
   }
-  return solvePolynomial(lhsStr, rhsStr);
+  const p = solvePolynomial(lhsStr, rhsStr);
+  if (p.error) {
+    const imp = tryImplicit(lhsStr, rhsStr, bare);
+    if (imp) return imp;
+    return p;
+  }
+  return p;
+}
+
+function solveInequality(s, op, opStart, opEnd) {
+  const lhsStr = s.slice(0, opStart), rhsStr = s.slice(opEnd);
+  if (!lhsStr || !rhsStr) return { error: 'Both sides of the inequality must have content.' };
+  if (INEQ_RE.test(lhsStr) || INEQ_RE.test(rhsStr)) return { error: 'Only one inequality operator is allowed.' };
+  if (lhsStr.indexOf('=') !== -1 || rhsStr.indexOf('=') !== -1) {
+    return { error: "Mixing '=' with an inequality operator is not supported." };
+  }
+  const boundary = solveEquation(lhsStr + '=' + rhsStr, false);
+  if (boundary.error) return boundary;
+  if (boundary.kind === 'implicit') {
+    return { error: 'Inequality shading requires a boundary solvable for y — this boundary is an implicit curve.' };
+  }
+  const lp = parseExpr(lhsStr, false), rp = parseExpr(rhsStr, false);
+  boundary.inequality = {
+    op: op,
+    lhs: lp.error ? null : lp.node,
+    rhs: rp.error ? null : rp.node,
+  };
+  return boundary;
+}
+
+function hasVar(node) {
+  switch (node.t) {
+    case 'x': case 'y': case 'theta': return true;
+    case 'neg': return hasVar(node.a);
+    case 'f': return hasVar(node.a);
+    case 'pow': return hasVar(node.l) || hasVar(node.r);
+    case 'b': return hasVar(node.l) || hasVar(node.r);
+  }
+  return false;
+}
+
+// Parse lhs = rhs (or a bare expression) as F(x, y) = 0 for grid sampling.
+function tryImplicit(lhsStr, rhsStr, bare) {
+  let lhs, rhs;
+  if (bare) {
+    const p = parseExpr(rhsStr, false);
+    if (p.error) return null;
+    lhs = null; rhs = p.node;
+  } else {
+    const lp = parseExpr(lhsStr, false);
+    if (lp.error) return null;
+    const rp = parseExpr(rhsStr, false);
+    if (rp.error) return null;
+    lhs = lp.node; rhs = rp.node;
+  }
+  const F = bare ? simplify(rhs) : simplify({ t: 'b', op: '-', l: lhs, r: rhs });
+  if (!hasVar(F)) return null;
+  return { kind: 'implicit', expr: F, display: bare ? rhsStr : lhsStr + ' = ' + rhsStr };
 }
 
 function solvePolynomial(lhsStr, rhsStr) {
@@ -793,6 +889,44 @@ function evalAst(node, x) {
   throw new Error('unknown node');
 }
 
+// Evaluate an AST that may contain both x and y (implicit curves +
+// inequality side tests). Mirrors evalAst2 in app/solver.py.
+function evalAst2(node, x, y) {
+  switch (node.t) {
+    case 'num': return node.v;
+    case 'sym': return node.n === 'e' ? Math.E : Math.PI;
+    case 'x': return x;
+    case 'y': return y;
+    case 'theta': return x;
+    case 'neg': return -evalAst2(node.a, x, y);
+    case 'f': {
+      const v = evalAst2(node.a, x, y);
+      switch (node.n) {
+        case 'sin': return Math.sin(v);
+        case 'cos': return Math.cos(v);
+        case 'tan': return Math.tan(v);
+        case 'log': return Math.log(v);
+        case 'sqrt': return Math.sqrt(v);
+        case 'exp': return Math.exp(v);
+        case 'abs': return Math.abs(v);
+      }
+      throw new Error('unknown function');
+    }
+    case 'b': {
+      const l = evalAst2(node.l, x, y), r = evalAst2(node.r, x, y);
+      switch (node.op) {
+        case '+': return l + r;
+        case '-': return l - r;
+        case '*': return l * r;
+        case '/': return l / r;
+      }
+      throw new Error('unknown op');
+    }
+    case 'pow': return Math.pow(evalAst2(node.l, x, y), evalAst2(node.r, x, y));
+  }
+  throw new Error('unknown node');
+}
+
 function discriminant(sol, x) {
   return sol.b * sol.b + 4 * sol.a * evalPoly(sol.poly, x);
 }
@@ -827,6 +961,21 @@ function autoRange(sol) {
 
 // Build branch points for a solution. Returns { xRange, step, branches } or { error }.
 function buildBranches(sol, xMin, xMax, xStep) {
+  if (sol.kind === 'implicit') {
+    const built = buildImplicitBranches(sol, xMin, xMax, xStep);
+    if (built.error) return built;
+    return built;
+  }
+  const built = buildBranchesInner(sol, xMin, xMax, xStep);
+  if (!built.error && sol.inequality) {
+    // Attach the shading side, mirroring generate_points in app/solver.py.
+    built.inequality = sol.inequality;
+    built.inequality.side = inequalitySide(sol, built.branches);
+  }
+  return built;
+}
+
+function buildBranchesInner(sol, xMin, xMax, xStep) {
   if ((xMin === undefined) !== (xMax === undefined)) {
     return { error: 'Provide both x_min and x_max, or neither.' };
   }
@@ -934,6 +1083,177 @@ function buildBranches(sol, xMin, xMax, xStep) {
   };
 }
 
+/* ================= implicit curves: F(x, y) = 0 via marching squares ================= */
+
+function safeEval2(F, x, y) {
+  let v;
+  try { v = evalAst2(F, x, y); } catch (e) { return NaN; }
+  return isFinite(v) ? v : NaN;
+}
+
+// Line segment(s) crossing one grid cell where the zero contour passes.
+// Corners: v00 (x0,y0) bottom-left, v10 (x1,y0) bottom-right,
+// v11 (x1,y1) top-right, v01 (x0,y1) top-left. Returns array of
+// [[x,y],[x,y]] segments (possibly empty).
+function cellSegments(v00, v10, v11, v01, x0, y0, x1, y1) {
+  if (![v00, v10, v11, v01].every(isFinite)) return [];
+  const cross = (a, b, pa, pb) => {
+    const t = a / (a - b);
+    return [pa[0] + (pb[0] - pa[0]) * t, pa[1] + (pb[1] - pa[1]) * t];
+  };
+  const pts = [];
+  if ((v00 > 0) !== (v10 > 0)) pts.push(cross(v00, v10, [x0, y0], [x1, y0]));
+  if ((v10 > 0) !== (v11 > 0)) pts.push(cross(v10, v11, [x1, y0], [x1, y1]));
+  if ((v11 > 0) !== (v01 > 0)) pts.push(cross(v11, v01, [x1, y1], [x0, y1]));
+  if ((v01 > 0) !== (v00 > 0)) pts.push(cross(v01, v00, [x0, y1], [x0, y0]));
+  if (pts.length === 2) return [pts];
+  if (pts.length === 4) {
+    // saddle — disambiguate with the cell-centre value
+    const vc = (v00 + v10 + v11 + v01) / 4;
+    const [b, r, t, l] = pts;
+    if (vc > 0) return [[b, r], [l, t]];
+    return [[b, l], [r, t]];
+  }
+  return [];
+}
+
+// Chain [[x,y],[x,y]] segments into polylines by endpoint match.
+function chainSegments(segments) {
+  if (!segments.length) return [];
+  const key = p => p[0].toFixed(9) + ',' + p[1].toFixed(9);
+  const ends = new Map();
+  segments.forEach((seg, idx) => {
+    const ka = key(seg[0]), kb = key(seg[1]);
+    if (!ends.has(ka)) ends.set(ka, []);
+    if (!ends.has(kb)) ends.set(kb, []);
+    ends.get(ka).push([idx, 0]);
+    ends.get(kb).push([idx, 1]);
+  });
+  const used = new Array(segments.length).fill(false);
+  const chains = [];
+  for (let start = 0; start < segments.length; start++) {
+    if (used[start]) continue;
+    const chain = [segments[start][0], segments[start][1]];
+    used[start] = true;
+    for (const head of [0, 1]) {
+      for (;;) {
+        const p = head === 0 ? key(chain[0]) : key(chain[chain.length - 1]);
+        let nxt = null;
+        for (const [idx, which] of (ends.get(p) || [])) {
+          if (!used[idx]) { nxt = [idx, which]; break; }
+        }
+        if (!nxt) break;
+        const [idx, which] = nxt;
+        used[idx] = true;
+        const other = which === 0 ? segments[idx][1] : segments[idx][0];
+        if (head === 0) chain.unshift(other);
+        else chain.push(other);
+      }
+    }
+    chains.push(chain);
+  }
+  return chains;
+}
+
+// Zero-contour polylines of F over the window (marching squares).
+function marchingSquares(F, xLo, xHi, yLo, yHi, nx, ny) {
+  const xs = [], ys = [];
+  for (let i = 0; i <= nx; i++) xs.push(xLo + (xHi - xLo) * i / nx);
+  for (let j = 0; j <= ny; j++) ys.push(yLo + (yHi - yLo) * j / ny);
+  const vals = xs.map(x => ys.map(y => safeEval2(F, x, y)));
+  const segments = [];
+  for (let i = 0; i < nx; i++) {
+    const x0 = xs[i], x1 = xs[i + 1];
+    for (let j = 0; j < ny; j++) {
+      const y0 = ys[j], y1 = ys[j + 1];
+      const segs = cellSegments(
+        vals[i][j], vals[i + 1][j], vals[i + 1][j + 1], vals[i][j + 1],
+        x0, y0, x1, y1,
+      );
+      for (const s of segs) segments.push(s);
+    }
+  }
+  return chainSegments(segments);
+}
+
+// Build branch points for an implicit solution (grid-sampled contour).
+function buildImplicitBranches(sol, xMin, xMax, xStep) {
+  if ((xMin === undefined) !== (xMax === undefined)) {
+    return { error: 'Provide both x_min and x_max, or neither.' };
+  }
+  let lo, hi;
+  if (xMin === undefined) { lo = IMPLICIT_MIN; hi = IMPLICIT_MAX; }
+  else {
+    if (xMin > xMax) return { error: 'x_min must be <= x_max.' };
+    lo = xMin; hi = xMax;
+  }
+  const span = hi - lo;
+  let nx;
+  if (xStep !== undefined) {
+    if (!(xStep > 0) || xStep > 1000) return { error: 'x_step must be > 0 and <= 1000.' };
+    nx = Math.max(8, Math.min(IMPLICIT_GRID_MAX, Math.round(span / xStep)));
+  } else {
+    nx = IMPLICIT_GRID;
+  }
+  const half = span / 2;
+  const chains = marchingSquares(sol.expr, lo, hi, -half, half, nx, nx);
+  if (!chains.length) return { error: 'No real points where the equation holds in the window.' };
+  let total = 0;
+  for (const c of chains) total += c.length;
+  if (total > MAX_IMPLICIT_POINTS) {
+    return { error: 'Implicit curve too detailed for this window — increase the step.' };
+  }
+  return {
+    xRange: { min: lo, max: hi },
+    step: span / nx,
+    branches: chains.map(c => ({ label: '', points: c.map(p => ({ x: p[0], y: p[1] })) })),
+  };
+}
+
+/* ================= inequality shading: which side is shaded? ================= */
+
+// Mirrors _inequality_side in app/solver.py.
+function inequalitySide(sol, branches) {
+  const ineq = sol.inequality;
+  const op = ineq.op, lhs = ineq.lhs, rhs = ineq.rhs;
+  if (!lhs || !rhs) return 'above';
+  const eps = 1e-9;
+  const fv = (x, y) => {
+    let v;
+    try { v = evalAst2({ t: 'b', op: '-', l: lhs, r: rhs }, x, y); } catch (e) { return null; }
+    return isFinite(v) ? v : null;
+  };
+  const sat = v => {
+    if (v === null) return null;
+    if (Math.abs(v) <= eps) return null;
+    if (op === '>') return v > eps;
+    if (op === '>=') return v >= -eps;
+    if (op === '<') return v < -eps;
+    return v <= eps; // <=
+  };
+  if (sol.kind === 'quadratic' && branches.length >= 2) {
+    const up = branches[0].points, low = branches[1].points;
+    const n = Math.min(up.length, low.length);
+    const step = Math.max(1, Math.floor(n / 8));
+    for (let i = 0; i < n; i += step) {
+      const x0 = up[i].x;
+      const yMid = (up[i].y + low[i].y) / 2;
+      const res = sat(fv(x0, yMid));
+      if (res !== null) return res ? 'between' : 'outside';
+    }
+    return 'between';
+  }
+  for (const br of branches) {
+    const pts = br.points;
+    const step = Math.max(1, Math.floor(pts.length / 8));
+    for (let i = 0; i < pts.length; i += step) {
+      const resAbove = sat(fv(pts[i].x, pts[i].y + 1.0));
+      if (resAbove !== null) return resAbove ? 'above' : 'below';
+    }
+  }
+  return 'above';
+}
+
 /* ================= drawing (with pan/zoom view) ================= */
 
 const PALETTES = {
@@ -1023,6 +1343,8 @@ function draw(curves) {
   // polyline breaks when two consecutive samples jump across a vertical
   // asymptote (tan, 1/x) so no false line is drawn through the wall.
   curves.forEach(function (curve) {
+    // Inequality shading first (translucent fill), then the crisp boundary.
+    if (curve.inequality) drawInequalityShade(ctx, curve, X, Y, W, H);
     curve.branches.forEach(function (br) {
       if (!br.points.length) return;
       ctx.strokeStyle = curve.color;
@@ -1052,6 +1374,75 @@ function draw(curves) {
       }
     });
   });
+}
+
+/* ================= inequality shading ================= */
+
+// Fill the shaded region of an inequality curve with a translucent tint of
+// the curve colour, in front of the grid but behind the boundary line.
+// side ∈ above / below / between / outside. The fill uses the current
+// view transform, so it stays correct through pan/zoom (the region is
+// unbounded in data space; the canvas clips it to the visible window).
+function drawInequalityShade(ctx, curve, X, Y, W, H) {
+  const ineq = curve.inequality;
+  const side = ineq.side;
+  const alpha = 0.25;
+  const topY = 0, bottomY = H;  // screen-space edges of the canvas
+
+  const fillAbove = (br) => {
+    if (!br.points.length) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = curve.color;
+    ctx.beginPath();
+    ctx.moveTo(X(br.points[0].x), Y(br.points[0].y));
+    for (const p of br.points) ctx.lineTo(X(p.x), Y(p.y));
+    ctx.lineTo(X(br.points[br.points.length - 1].x), topY);
+    ctx.lineTo(X(br.points[0].x), topY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  };
+  const fillBelow = (br) => {
+    if (!br.points.length) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = curve.color;
+    ctx.beginPath();
+    ctx.moveTo(X(br.points[0].x), Y(br.points[0].y));
+    for (const p of br.points) ctx.lineTo(X(p.x), Y(p.y));
+    ctx.lineTo(X(br.points[br.points.length - 1].x), bottomY);
+    ctx.lineTo(X(br.points[0].x), bottomY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  };
+
+  if (side === 'above') {
+    curve.branches.forEach(fillAbove);
+  } else if (side === 'below') {
+    curve.branches.forEach(fillBelow);
+  } else if (side === 'between' && curve.branches.length >= 2) {
+    // Fill the band between the two branches (e.g. inside a circle).
+    const up = curve.branches[0], low = curve.branches[1];
+    const n = Math.min(up.points.length, low.points.length);
+    if (n < 2) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = curve.color;
+    ctx.beginPath();
+    ctx.moveTo(X(up.points[0].x), Y(up.points[0].y));
+    for (let i = 1; i < n; i++) ctx.lineTo(X(up.points[i].x), Y(up.points[i].y));
+    for (let i = n - 1; i >= 0; i--) ctx.lineTo(X(low.points[i].x), Y(low.points[i].y));
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  } else if (side === 'outside' && curve.branches.length >= 2) {
+    // Both outside the branches (e.g. outside a circle): shade above the
+    // upper branch and below the lower branch.
+    fillAbove(curve.branches[0]);
+    fillBelow(curve.branches[1]);
+  }
 }
 
 /* ================= canvas interaction: pan / pinch-zoom / wheel / reset ================= */
@@ -1289,7 +1680,7 @@ function renderLegend(curves) {
     dot.className = 'color-dot';
     dot.style.background = c.color;
     const label = document.createElement('span');
-    label.textContent = c.display;
+    label.textContent = c.display + (c.inequality ? '  ' + c.inequality.op : '');
     item.appendChild(dot);
     item.appendChild(label);
     lg.appendChild(item);
@@ -1420,7 +1811,13 @@ async function plot() {
       const built = buildBranches(sol, rv('xMin'), rv('xMax'), rv('xStep'));
       if (built.error) { showError(built.error); document.getElementById('solved').textContent = ''; return; }
       if (!firstRange) { firstRange = built.xRange; firstStep = built.step; }
-      curves.push({ formula: f, display: sol.display, kind: sol.kind, branches: built.branches });
+      curves.push({
+        formula: f,
+        display: sol.display,
+        kind: sol.kind,
+        branches: built.branches,
+        inequality: built.inequality || sol.inequality,
+      });
     }
     data = { mode: mode, formulas: formulas, x_range: firstRange, step: firstStep, curves: curves };
   }
@@ -1439,7 +1836,12 @@ async function plot() {
     'Given:  ' + given + '    \u2192    ' + displays +
     '    (plotted for ' + rangeVar + ' = ' + rng.min + ' \u2026 ' + rng.max + stepNote + multiNote + ')';
   const curves = data.curves.map(function (c, i) {
-    return { color: curveColors[i % curveColors.length], display: c.display, branches: c.branches };
+    return {
+      color: curveColors[i % curveColors.length],
+      display: c.display,
+      branches: c.branches,
+      inequality: c.inequality,
+    };
   });
   lastCurves = curves;
   view = null;
@@ -1588,6 +1990,19 @@ function init() {
   renderHistory();
   applyAccordions();
   plot();
+  refreshHits();
+  setInterval(refreshHits, 30_000);  // keep the hit counter current across tabs
+}
+
+// Refresh the "Hits:" footer from /api/hits (the server-rendered value is a
+// starting point; polling keeps multiple open tabs in sync).
+function refreshHits() {
+  const el = document.getElementById('hits');
+  if (!el) return;
+  fetch('/api/hits')
+    .then(r => r.json())
+    .then(d => { if (d && typeof d.hits === 'number') el.textContent = 'Hits: ' + d.hits; })
+    .catch(() => { /* keep the server-rendered value on transient errors */ });
 }
 
 if (typeof document !== 'undefined' && document.addEventListener) {

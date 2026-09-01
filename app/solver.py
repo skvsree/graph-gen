@@ -29,11 +29,21 @@ UNBOUNDED_FALLBACK = 100    # symmetric default for fully unbounded domains
 MAX_POINTS_PER_BRANCH = 5000  # explicit ranges are capped at this many points
 
 FUNCTIONS = {"sin", "cos", "tan", "log", "ln", "sqrt", "exp", "abs"}
+_KNOWN_NAMES = FUNCTIONS | {"pi", "theta", "e"}
 _FUNC_RE = re.compile(
     r"[()]|(?:sin|cos|tan|log|ln|sqrt|exp|abs)\(|(?<![a-zA-Z])e(?![a-zA-Z])|pi"
 )
 FUNCTION_Y_LIMIT = 1e6  # |y| beyond this is treated as an asymptote blow-up (tan, 1/x)
 DEFAULT_POLAR_MAX = 4 * math.pi  # default θ range for polar mode: two full turns
+
+# --- implicit curves (grid sampling / marching squares) ---
+DEFAULT_IMPLICIT_MIN, DEFAULT_IMPLICIT_MAX = -10.0, 10.0  # default square window
+IMPLICIT_GRID_DEFAULT = 150   # grid cells per axis when no x_step is given
+IMPLICIT_GRID_MAX = 250       # hard cap on grid cells per axis
+MAX_IMPLICIT_POINTS = 20_000  # total contour points cap per curve
+
+# --- inequalities (y > 2x + 1 etc.) ---
+_INEQ_OPS = (">=", "<=", ">", "<")
 
 
 class SolverError(ValueError):
@@ -143,11 +153,18 @@ def _poly_str(poly: dict[int, float]) -> str:
 def solve_equation(raw: str, polar: bool = False) -> dict:
     """Solve ``raw`` for y (cartesian) or r (polar).
 
-    Returns ``{"kind": "linear"|"quadratic"|"function"|"polar", ...}``.
+    Returns ``{"kind": "linear"|"quadratic"|"function"|"polar"|"implicit", ...}``.
 
     - Cartesian (default): as documented — polynomial formulas via
       :func:`_solve_polynomial`, function/parenthesis formulas via
       :func:`_solve_functional`.
+    - Inequalities (``y > 2x + 1``, ``x^2 + y^2 < 25``): the boundary
+      equation is solved normally and the solution gains an
+      ``inequality`` key (``{op, lhs, rhs}``); the shaded side is worked
+      out at point-generation time.
+    - Implicit curves (``x^2 + y^3 = 7``, ``x*y = 4``, …): when neither
+      solver can isolate y, the formula is treated as ``F(x, y) = 0`` and
+      rendered by grid sampling (kind ``"implicit"``, F as an AST).
     - Polar (``polar=True``): the equation must be linear in ``r``,
       ``r = f(θ)`` (write the angle as ``θ`` or ``theta``). Always goes
       through the expression path; the radius variable is ``r`` (or ``y``).
@@ -159,13 +176,18 @@ def solve_equation(raw: str, polar: bool = False) -> dict:
     if not s:
         raise SolverError("Enter a formula first.")
 
+    if not polar:
+        m = _INEQ_RE.search(s)
+        if m:
+            return _solve_inequality(s, m.group(0), m.start(), m.end())
+
     eq = s.find("=")
     if eq == -1:
-        lhs_str, rhs_str = "y", s
+        lhs_str, rhs_str, bare = "y", s, True
     else:
         if s.find("=", eq + 1) != -1:
             raise SolverError('Only one "=" allowed.')
-        lhs_str, rhs_str = s[:eq], s[eq + 1 :]
+        lhs_str, rhs_str, bare = s[:eq], s[eq + 1 :], False
     if not lhs_str or not rhs_str:
         raise SolverError('Both sides of "=" must have content.')
 
@@ -177,10 +199,92 @@ def solve_equation(raw: str, polar: bool = False) -> dict:
             )
         return sol
     if _FUNC_RE.search(s):
-        sol = _solve_functional(lhs_str, rhs_str)
-        if sol is not None:
-            return sol
-    return _solve_polynomial(lhs_str, rhs_str)
+        try:
+            sol = _solve_functional(lhs_str, rhs_str)
+            if sol is not None:
+                return sol
+        except SolverError:
+            # e.g. 'y' inside a function — the equation may still be a
+            # plottable implicit curve (sin(x) + sin(y) = 1).
+            imp = _try_implicit(lhs_str, rhs_str, bare)
+            if imp is not None:
+                return imp
+            raise
+    try:
+        return _solve_polynomial(lhs_str, rhs_str)
+    except SolverError:
+        imp = _try_implicit(lhs_str, rhs_str, bare)
+        if imp is not None:
+            return imp
+        raise
+
+
+_INEQ_RE = re.compile(r">=|<=|>|<")
+
+
+def _solve_inequality(s: str, op: str, op_start: int, op_end: int) -> dict:
+    """Solve ``lhs op rhs`` (op in >, >=, <, <=) by solving the boundary.
+
+    Returns the boundary solution (linear/quadratic/function) with an extra
+    ``inequality`` key carrying ``{op, lhs, rhs}`` ASTs used to decide which
+    side to shade. Raises :class:`SolverError` for malformed inequalities or
+    boundaries that cannot be solved for y.
+    """
+    lhs_str, rhs_str = s[:op_start], s[op_end:]
+    if not lhs_str or not rhs_str:
+        raise SolverError("Both sides of the inequality must have content.")
+    if _INEQ_RE.search(lhs_str) or _INEQ_RE.search(rhs_str):
+        raise SolverError("Only one inequality operator is allowed.")
+    if "=" in lhs_str or "=" in rhs_str:
+        raise SolverError("Mixing '=' with an inequality operator is not supported.")
+
+    boundary = solve_equation(lhs_str + "=" + rhs_str)
+    if boundary.get("kind") == "implicit":
+        raise SolverError(
+            "Inequality shading requires a boundary solvable for y — "
+            "this boundary is an implicit curve."
+        )
+    try:
+        lhs = parse_expr(lhs_str)
+        rhs = parse_expr(rhs_str)
+    except SolverError:
+        lhs = rhs = None  # side will fall back to a default
+    boundary["inequality"] = {"op": op, "lhs": lhs, "rhs": rhs}
+    return boundary
+
+
+def _has_var(node) -> bool:
+    """True when an AST mentions x, y, or θ anywhere (not a constant)."""
+    t = node[0]
+    if t in ("x", "y", "theta"):
+        return True
+    if t in ("neg", "func"):
+        return _has_var(node[1] if t == "neg" else node[2])
+    if t == "pow":
+        return _has_var(node[1]) or _has_var(node[2])
+    if t == "bin":
+        return _has_var(node[2]) or _has_var(node[3])
+    return False
+
+
+def _try_implicit(lhs_str: str, rhs_str: str, bare: bool) -> dict | None:
+    """Parse ``lhs = rhs`` (or a bare expression) as ``F(x, y) = 0``.
+
+    Returns ``{"kind": "implicit", "expr": F, "display": ...}`` when both
+    sides parse as expressions and the result is not a constant; ``None``
+    otherwise (caller re-raises the original error).
+    """
+    try:
+        if bare:
+            F = _simplify(parse_expr(rhs_str))
+        else:
+            F = _simplify(("bin", "-", parse_expr(lhs_str), parse_expr(rhs_str)))
+    except SolverError:
+        return None
+    if not _has_var(F):
+        return None
+    display = rhs_str if bare else f"{lhs_str} = {rhs_str}"
+    return {"kind": "implicit", "expr": F, "display": display}
 
 
 def _solve_polynomial(lhs_str: str, rhs_str: str) -> dict:
@@ -288,7 +392,16 @@ def expr_tokenize(s: str) -> list:
             j = i
             while j < n and s[j].isalpha():
                 j += 1
-            tokens.append(("name", s[i:j]))
+            name = s[i:j]
+            if name not in _KNOWN_NAMES and all(ch in "xy" for ch in name):
+                # "xy" -> x*y, "xx" -> x*x (implicit multiplication of
+                # single-letter variables); multi-letter names that are not
+                # functions/constants stay whole (so "foo" still errors as
+                # an unknown symbol).
+                for ch in name:
+                    tokens.append(("name", ch))
+            else:
+                tokens.append(("name", name))
             i = j
             continue
         if c in "+-*/^()":
@@ -715,6 +828,60 @@ def eval_poly(poly: dict[int, float], x: float) -> float:
     return sum(c * (x**e) for e, c in poly.items())
 
 
+def eval_ast2(node, x: float, y: float) -> float:
+    """Evaluate an AST that may contain both ``x`` and ``y``.
+
+    Used by the implicit-curve plotter (F(x, y) = 0) and by inequality
+    side determination. Mirrors :func:`eval_ast` but ``y`` evaluates to the
+    given value instead of raising.
+    """
+    t = node[0]
+    if t == "num":
+        return node[1]
+    if t == "sym":
+        return math.e if node[1] == "e" else math.pi
+    if t == "x":
+        return x
+    if t == "y":
+        return y
+    if t == "theta":
+        return x
+    if t == "neg":
+        return -eval_ast2(node[1], x, y)
+    if t == "func":
+        v = eval_ast2(node[2], x, y)
+        f = node[1]
+        if f == "sin":
+            return math.sin(v)
+        if f == "cos":
+            return math.cos(v)
+        if f == "tan":
+            return math.tan(v)
+        if f == "log":
+            return math.log(v)
+        if f == "sqrt":
+            return math.sqrt(v)
+        if f == "exp":
+            return math.exp(v)
+        if f == "abs":
+            return abs(v)
+        raise SolverError(f"Internal solver error: unknown function {f}.")  # pragma: no cover
+    if t == "bin":
+        l, r = eval_ast2(node[2], x, y), eval_ast2(node[3], x, y)
+        op = node[1]
+        if op == "+":
+            return l + r
+        if op == "-":
+            return l - r
+        if op == "*":
+            return l * r
+        if op == "/":
+            return l / r
+    if t == "pow":
+        return eval_ast2(node[1], x, y) ** eval_ast2(node[2], x, y)
+    raise SolverError("Internal solver error.")  # pragma: no cover
+
+
 def _generate_polar(
     raw: str, x_min: float | None = None, x_max: float | None = None, x_step: float | None = None
 ) -> dict:
@@ -872,8 +1039,12 @@ def generate_points(
     where each branch is ``{"label", "points": [(x, y), ...]}``.
     """
     if mode == "polar":
+        if _INEQ_RE.search(str(raw)):
+            raise SolverError("Inequalities are not supported in polar mode.")
         return _generate_polar(raw, x_min, x_max, x_step)
     sol = solve_equation(raw)
+    if sol["kind"] == "implicit":
+        return _generate_implicit(sol, x_min, x_max, x_step)
     if (x_min is None) != (x_max is None):
         raise SolverError("Provide both x_min and x_max, or neither.")
     if x_min is None:
@@ -955,4 +1126,222 @@ def generate_points(
             {"label": "\u2212", "points": minus},
         ]
 
+    if sol.get("inequality"):
+        sol["inequality"]["side"] = _inequality_side(sol, branches)
+
     return {"solution": sol, "x_range": (lo, hi), "step": step, "branches": branches}
+
+
+# ============================================================================
+# Implicit curves: F(x, y) = 0 via grid sampling + marching squares
+# ============================================================================
+
+def _safe_eval2(F, x: float, y: float) -> float:
+    """Evaluate F(x, y), returning NaN for domain errors / blow-ups."""
+    try:
+        v = eval_ast2(F, x, y)
+    except (ValueError, ZeroDivisionError, OverflowError):
+        return float("nan")
+    return v if math.isfinite(v) else float("nan")
+
+
+def _cell_segments(v00, v10, v11, v01, x0, y0, x1, y1):
+    """Line segment(s) crossing one grid cell where the zero contour passes.
+
+    Corners: v00 (x0,y0) bottom-left, v10 (x1,y0) bottom-right,
+    v11 (x1,y1) top-right, v01 (x0,y1) top-left. Returns a list of
+    ``((x, y), (x, y))`` segments, or ``[]``.
+    """
+    if not all(math.isfinite(v) for v in (v00, v10, v11, v01)):
+        return []
+
+    def cross(a, b, pa, pb):
+        """Zero of the linear interp between values a at pa and b at pb."""
+        t = a / (a - b)
+        return (pa[0] + (pb[0] - pa[0]) * t, pa[1] + (pb[1] - pa[1]) * t)
+
+    pts = []
+    if (v00 > 0) != (v10 > 0):
+        pts.append(cross(v00, v10, (x0, y0), (x1, y0)))
+    if (v10 > 0) != (v11 > 0):
+        pts.append(cross(v10, v11, (x1, y0), (x1, y1)))
+    if (v11 > 0) != (v01 > 0):
+        pts.append(cross(v11, v01, (x1, y1), (x0, y1)))
+    if (v01 > 0) != (v00 > 0):
+        pts.append(cross(v01, v00, (x0, y1), (x0, y0)))
+    if len(pts) == 2:
+        return [(pts[0], pts[1])]
+    if len(pts) == 4:
+        # saddle — disambiguate with the cell-centre value
+        vc = (v00 + v10 + v11 + v01) / 4
+        b, r, t, l = pts
+        if vc > 0:
+            return [(b, r), (l, t)]
+        return [(b, l), (r, t)]
+    return []
+
+
+def _chain_segments(segments: list) -> list:
+    """Chain ``((x, y), (x, y))`` segments into polylines by endpoint match."""
+    if not segments:
+        return []
+    key = lambda p: (round(p[0], 9), round(p[1], 9))
+    ends: dict = {}
+    for idx, (a, b) in enumerate(segments):
+        ends.setdefault(key(a), []).append((idx, 0))
+        ends.setdefault(key(b), []).append((idx, 1))
+    used = [False] * len(segments)
+    chains = []
+    for start in range(len(segments)):
+        if used[start]:
+            continue
+        chain = [segments[start][0], segments[start][1]]
+        used[start] = True
+        for head in (0, 1):  # 0 = extend before the chain, 1 = extend after
+            while True:
+                p = key(chain[0] if head == 0 else chain[-1])
+                nxt = next(((i, w) for (i, w) in ends.get(p, []) if not used[i]), None)
+                if nxt is None:
+                    break
+                idx, which = nxt
+                used[idx] = True
+                seg = segments[idx]
+                other = seg[1] if which == 0 else seg[0]
+                if head == 0:
+                    chain.insert(0, other)
+                else:
+                    chain.append(other)
+        chains.append(chain)
+    return chains
+
+
+def _generate_implicit(
+    sol: dict,
+    x_min: float | None = None,
+    x_max: float | None = None,
+    x_step: float | None = None,
+) -> dict:
+    """Grid-sample ``F(x, y) = 0`` over a square window (marching squares).
+
+    Default window: x, y in [-10, 10]. Explicit ``x_min``/``x_max`` set the
+    x span; the y window mirrors it (centred on 0). ``x_step`` controls grid
+    density (default ~150 cells per axis). Returns the standard
+    ``{solution, x_range, step, branches}`` shape where each branch is a
+    contour polyline.
+    """
+    if (x_min is None) != (x_max is None):
+        raise SolverError("Provide both x_min and x_max, or neither.")
+    if x_min is None:
+        lo, hi = DEFAULT_IMPLICIT_MIN, DEFAULT_IMPLICIT_MAX
+    else:
+        assert x_max is not None  # guaranteed by the both-or-neither check
+        if x_min > x_max:
+            raise SolverError("x_min must be <= x_max.")
+        lo, hi = x_min, x_max
+    span = hi - lo
+    if x_step is not None:
+        if not x_step > 0 or x_step > 1000:
+            raise SolverError("x_step must be > 0 and <= 1000.")
+        nx = max(8, min(IMPLICIT_GRID_MAX, int(round(span / x_step))))
+    else:
+        nx = IMPLICIT_GRID_DEFAULT
+    ny = nx  # square cells
+    half = span / 2
+    chains = _marching_squares(sol["expr"], lo, hi, -half, half, nx, ny)
+    if not chains:
+        raise SolverError("No real points where the equation holds in the window.")
+    total = sum(len(c) for c in chains)
+    if total > MAX_IMPLICIT_POINTS:
+        raise SolverError(
+            "Implicit curve too detailed for this window — increase the step."
+        )
+    return {
+        "solution": sol,
+        "x_range": (lo, hi),
+        "step": span / nx,
+        "branches": [{"label": "", "points": c} for c in chains],
+    }
+
+
+def _marching_squares(F, x_lo, x_hi, y_lo, y_hi, nx, ny) -> list:
+    """Zero-contour polylines of F over the window (list of point lists)."""
+    xs = [x_lo + (x_hi - x_lo) * i / nx for i in range(nx + 1)]
+    ys = [y_lo + (y_hi - y_lo) * j / ny for j in range(ny + 1)]
+    vals = [[_safe_eval2(F, x, y) for y in ys] for x in xs]
+    segments = []
+    for i in range(nx):
+        x0, x1 = xs[i], xs[i + 1]
+        for j in range(ny):
+            y0, y1 = ys[j], ys[j + 1]
+            segs = _cell_segments(
+                vals[i][j], vals[i + 1][j], vals[i + 1][j + 1], vals[i][j + 1],
+                x0, y0, x1, y1,
+            )
+            segments.extend(segs)
+    return _chain_segments(segments)
+
+
+# ============================================================================
+# Inequality shading: which side of the boundary is the shaded region?
+# ============================================================================
+
+def _inequality_side(sol: dict, branches: list) -> str:
+    """Return the shaded side for an inequality solution.
+
+    "above"/"below" for a single boundary curve (linear/function),
+    "between"/"outside" for a two-branch quadratic. Decided by evaluating
+    ``F(x, y) = lhs − rhs`` just off the boundary at a few sample points.
+    Samples that land exactly on the boundary (|F| <= eps, e.g. tangency
+    points) are skipped as inconclusive.
+    """
+    ineq = sol["inequality"]
+    op = ineq["op"]
+    lhs, rhs = ineq["lhs"], ineq["rhs"]
+    if lhs is None or rhs is None:
+        return "above"  # sides didn't parse — default shading direction
+
+    def fv(x: float, y: float) -> float | None:
+        try:
+            v = eval_ast2(("bin", "-", lhs, rhs), x, y)
+        except (ValueError, ZeroDivisionError, OverflowError):
+            return None
+        return v if math.isfinite(v) else None
+
+    eps = 1e-9
+
+    def sat(v: float | None) -> bool | None:
+        """True/False verdict, or None when the point is on the boundary."""
+        if v is None:
+            return None
+        if abs(v) <= eps:
+            return None
+        if op == ">":
+            return v > eps
+        if op == ">=":
+            return v >= -eps
+        if op == "<":
+            return v < -eps
+        return v <= eps  # "<="
+
+    if sol["kind"] == "quadratic" and len(branches) >= 2:
+        up = branches[0]["points"]
+        low = branches[1]["points"]
+        n = min(len(up), len(low))
+        step = max(1, n // 8)
+        for i in range(0, n, step):
+            x0 = up[i][0]
+            y_mid = (up[i][1] + low[i][1]) / 2
+            res = sat(fv(x0, y_mid))
+            if res is not None:
+                return "between" if res else "outside"
+        return "between"
+
+    for br in branches:
+        pts = br["points"]
+        step = max(1, len(pts) // 8)
+        for i in range(0, len(pts), step):
+            x0, y0 = pts[i]
+            res_above = sat(fv(x0, y0 + 1.0))
+            if res_above is not None:
+                return "above" if res_above else "below"
+    return "above"

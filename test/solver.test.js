@@ -9,7 +9,7 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'templates', 'index.html
 const m = html.match(/<script>([\s\S]*?)<\/script>/);
 if (!m) { console.error('FAIL: no <script> found in index.html'); process.exit(1); }
 
-const sandbox = { console, Math, Number, String, Object, Set, isFinite, parseInt, parseFloat, JSON };
+const sandbox = { console, Math, Number, String, Object, Set, Map, Array, isFinite, parseInt, parseFloat, JSON };
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 // The guard `typeof document !== 'undefined'` prevents DOM code from running here.
@@ -61,14 +61,59 @@ check('x moves across =', solveEquation('y - x = 1').display, 'y = x + 1');
 check('fractional coeff', solveEquation('0.5x + y = 2').display, 'y = \u22120.5x + 2');
 
 // --- error cases
-checkErr('no y term', 'x = 5', 'no effective y term');
 checkErr('two equals signs', 'x + y = 3 = 4', 'Only one "="');
-checkErr('parens not linear in y', '(x+1)^2 + y^2 = 100', 'Parentheses');
-checkErr('y cubed', 'y^3 = x', 'linear or quadratic in y');
 checkErr('empty rhs', 'x = ', 'Both sides');
 checkErr('empty lhs', '= 3', 'Both sides');
 checkErr('garbage term', 'y = @#$', 'Cannot understand');
 checkErr('empty input', '   ', 'Enter a formula');
+
+// --- P3-1: implicit curves (F(x, y) = 0 via grid sampling) ---
+check('x = 5 vertical line kind', solveEquation('x = 5').kind, 'implicit');
+check('y^3 = x kind', solveEquation('y^3 = x').kind, 'implicit');
+check('(x+1)^2+y^2 = 100 kind', solveEquation('(x+1)^2 + y^2 = 100').kind, 'implicit');
+check('x*y = 4 kind', solveEquation('x*y = 4').kind, 'implicit');
+check('x^2+y^3 = 7 kind', solveEquation('x^2 + y^3 = 7').kind, 'implicit');
+check('x^3+y^3 = 6xy kind', solveEquation('x^3 + y^3 = 6xy').kind, 'implicit');
+check('sin(x)+sin(y) = 1 kind', solveEquation('sin(x) + sin(y) = 1').kind, 'implicit');
+check('implicit display', solveEquation('x^2 + y^3 = 7').display, 'x^2+y^3 = 7');
+checkErr('5 = 5 still errors', '5 = 5', 'no effective y term');
+{
+  const b = buildBranches(solveEquation('x = 5'));
+  check('implicit vertical line branches', b.branches.length >= 1, true);
+  check('implicit points on x=5', b.branches[0].points.every(p => Math.abs(p.x - 5) < 0.05), true);
+  check('implicit default range', b.xRange, { min: -10, max: 10 });
+}
+{
+  const b = buildBranches(solveEquation('x^2 + y^3 = 7'));
+  const total = b.branches.reduce((n, br) => n + br.points.length, 0);
+  check('implicit contour has points', total > 50 && total < 20000, true);
+}
+
+// --- P3-2: inequality shading ---
+check('y > 2x+1 op', solveEquation('y > 2x + 1').inequality.op, '>');
+check('y > 2x+1 kind', solveEquation('y > 2x + 1').kind, 'linear');
+check('2x+1 < y op', solveEquation('2x + 1 < y').inequality.op, '<');
+check('y >= 2x+1 op', solveEquation('y >= 2x+1').inequality.op, '>=');
+check('x^2+y^2 < 25 kind', solveEquation('x^2 + y^2 < 25').kind, 'quadratic');
+check('y > sin(x) kind', solveEquation('y > sin(x)').kind, 'function');
+{
+  const b = buildBranches(solveEquation('y > 2x + 1'));
+  check('y>2x+1 side above', b.inequality.side, 'above');
+}
+{
+  const b = buildBranches(solveEquation('y < 2x + 1'));
+  check('y<2x+1 side below', b.inequality.side, 'below');
+}
+{
+  const b = buildBranches(solveEquation('x^2 + y^2 < 25'));
+  check('circle interior side between', b.inequality.side, 'between');
+}
+{
+  const b = buildBranches(solveEquation('x^2 + y^2 > 25'));
+  check('circle exterior side outside', b.inequality.side, 'outside');
+}
+checkErr('two ops error', 'y > 2x + 1 < 3', 'Only one inequality');
+checkErr('mixed = and > error', 'y = 2x + 1 > 3', "Mixing '='");
 
 // --- x_step / explicit ranges (buildBranches) ---
 {
@@ -168,12 +213,12 @@ check('tan display', solveEquation('y = tan(x)').display, 'y = tan(x)');
   check('function auto range', b.xRange, { min: 1, max: 100 });
   check('function auto 199 pts', b.branches[0].points.length, 199);
 }
-checkErr('y in function', 'y = sin(y)', 'y\' appears inside a function');
+check('y = sin(y) is now implicit', solveEquation('y = sin(y)').kind, 'implicit');
 checkErr('unknown function', 'y = foo(x)', 'Unknown function');
 checkErr('unknown symbol', 'y = (bar)', 'Unknown symbol');
 checkErr('parse garbage', 'y = (2 + * 3)', 'Unexpected');
 checkErr('unclosed paren', 'y = sin(x+', 'Unexpected end of formula');
-checkErr('y cancels out', 'y + sin(x) = y + 2', 'no effective y term');
+check('y + sin(x) = y + 2 is implicit', solveEquation('y + sin(x) = y + 2').kind, 'implicit');
 {
   const b = buildBranches(solveEquation('y = sqrt(x)'), -10, -1);
   check('sqrt no real y', b.error || '', 'No real y for the given x range.');

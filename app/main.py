@@ -8,6 +8,7 @@ Endpoints:
 """
 
 import logging
+import re
 import threading
 import time
 from pathlib import Path
@@ -27,6 +28,12 @@ templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent
 DEFAULT_FORMULA = "x + y = 3"
 MAX_FORMULAS = 5
 MODES = {"cartesian", "polar"}
+
+# Default line colours for formula rows, in row order. MUST mirror the JS
+# `CURVE_PALETTE` array in templates/index.html — test_template_palette_matches_js
+# keeps the two in lockstep.
+CURVE_PALETTE = ["#dc2626", "#16a34a", "#2563eb", "#0891b2", "#0d9488"]
+_COLOR_RE = re.compile(r"^#[0-9a-f]{6}$")
 
 # ---------------------------------------------------------------------------
 # Caching: small in-process TTL cache for /api/points responses.
@@ -132,6 +139,21 @@ def _clean_formulas(raw: list[str]) -> list[str]:
     return [f.strip() for f in raw if f.strip()]
 
 
+def _clean_colors(raw: list[str], n: int) -> list[str]:
+    """Validate repeated `color` params (hex #rrggbb) and pad to length n.
+
+    Invalid/missing entries fall back to the palette colour for that row
+    position, so a `color` param can never inject markup into the page.
+    """
+    colors = []
+    for i in range(n):
+        c = raw[i].strip().lower() if i < len(raw) else ""
+        if not _COLOR_RE.fullmatch(c):
+            c = CURVE_PALETTE[i % len(CURVE_PALETTE)]
+        colors.append(c)
+    return colors
+
+
 def _check_mode(mode: str) -> None:
     if mode not in MODES:
         raise HTTPException(status_code=400, detail="mode must be 'cartesian' or 'polar'.")
@@ -141,6 +163,7 @@ def _check_mode(mode: str) -> None:
 def index(
     request: Request,
     formula: list[str] = Query(default=[DEFAULT_FORMULA]),
+    color: list[str] = Query(default=[]),
     mode: str = "cartesian",
     x_min: str | None = None,
     x_max: str | None = None,
@@ -150,11 +173,13 @@ def index(
 
     Repeated ``?formula=…&formula=…`` params pre-fill multiple formula rows
     (capped at MAX_FORMULAS for rendering). ``mode`` selects the tab
-    (``cartesian`` or ``polar``) and is kept in the shareable URL.
+    (``cartesian`` or ``polar``) and is kept in the shareable URL. Optional
+    repeated ``?color=#rrggbb`` params pre-fill each row's colour picker.
     """
     global _page_hits
     _check_mode(mode)
     formulas = _clean_formulas(formula) or [DEFAULT_FORMULA]
+    colors = _clean_colors(color, len(formulas))
     with _metrics_lock:
         _page_hits += 1
     hits = _page_hits
@@ -163,6 +188,7 @@ def index(
         name="index.html",
         context={
             "formulas": formulas[:MAX_FORMULAS],
+            "colors": colors[:MAX_FORMULAS],
             "mode": mode,
             "x_min": x_min or "",
             "x_max": x_max or "",

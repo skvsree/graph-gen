@@ -58,6 +58,50 @@ def test_index_invalid_mode_returns_400():
     assert r.status_code == 400
 
 
+def test_index_renders_color_pickers_per_formula():
+    r = client.get("/", params=[("formula", "y = x"), ("formula", "y = 2x")])
+    assert r.status_code == 200
+    assert r.text.count('class="color-pick"') == 2
+    # Palette defaults in row order.
+    assert 'value="#dc2626"' in r.text  # row 0
+    assert 'value="#16a34a"' in r.text  # row 1
+
+
+def test_index_prefills_color_params_in_order():
+    r = client.get(
+        "/",
+        params=[("formula", "y = x"), ("formula", "y = 2x"), ("color", "#ff00aa"), ("color", "#123456")],
+    )
+    assert r.status_code == 200
+    assert 'value="#ff00aa"' in r.text
+    assert 'value="#123456"' in r.text
+
+
+def test_index_color_params_fallback_to_palette():
+    # Invalid + missing colours fall back to the palette for that position.
+    r = client.get("/", params=[("formula", "y = x"), ("color", "not-a-colour")])
+    assert r.status_code == 200
+    assert 'value="#dc2626"' in r.text  # invalid -> palette[0]
+
+
+def test_index_color_param_never_injects_markup():
+    r = client.get("/", params=[("formula", "y = x"), ("color", '"><script>alert(1)</script>')])
+    assert r.status_code == 200
+    assert "<script>alert(1)</script>" not in r.text
+
+
+def test_template_palette_matches_js_palette():
+    # The server's CURVE_PALETTE and the template's must stay in lockstep so a
+    # URL without color= params renders the same defaults the client expects.
+    from app.main import CURVE_PALETTE
+
+    r = client.get("/")
+    m = __import__("re").search(r"CURVE_PALETTE = \[([^\]]+)\]", r.text)
+    assert m, "CURVE_PALETTE not found in template"
+    js_hexes = [h.strip("'") for h in __import__("re").findall(r"'#[0-9a-fA-F]{6}'", m.group(1))]
+    assert js_hexes == CURVE_PALETTE
+
+
 def test_api_points_polar():
     r = client.get("/api/points", params={"formula": "r = 2θ", "mode": "polar"})
     assert r.status_code == 200

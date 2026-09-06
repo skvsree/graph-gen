@@ -57,6 +57,13 @@
     width: 14px; height: 14px; border-radius: 50%; flex: none;
     background: var(--border); border: 1px solid var(--muted);
   }
+  .formula-row .color-pick {
+    width: 40px; height: 34px; padding: 1px; flex: none; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 6px; background: var(--card);
+  }
+  .formula-row .color-pick::-webkit-color-swatch-wrapper { padding: 2px; }
+  .formula-row .color-pick::-webkit-color-swatch { border: none; border-radius: 4px; }
+  .formula-row .color-pick::-moz-color-swatch { border: none; border-radius: 4px; }
   .row-del {
     border: none; background: none; cursor: pointer; font-size: 18px; line-height: 1;
     color: var(--muted); padding: 4px 6px; border-radius: 6px;
@@ -144,16 +151,11 @@
 
   <form class="form" id="form">
     <div id="formulaRows">
+      {% for f in formulas %}
       <div class="formula-row">
-        <input type="text" id="formula" class="formula-input" value="{{ formulas[0] }}" spellcheck="false" autocomplete="off" placeholder="e.g. y = sin(x)">
-        <span class="color-dot" title="line colour"></span>
-        <button type="button" class="row-del" title="Remove this formula" hidden>&times;</button>
-      </div>
-      {% for f in formulas[1:] %}
-      <div class="formula-row">
-        <input type="text" class="formula-input" value="{{ f }}" spellcheck="false" autocomplete="off" placeholder="e.g. y = cos(x)">
-        <span class="color-dot" title="line colour"></span>
-        <button type="button" class="row-del" title="Remove this formula">&times;</button>
+        <input type="text" class="formula-input" value="{{ f }}" spellcheck="false" autocomplete="off" placeholder="e.g. y = {{ 'sin(x)' if loop.first else 'cos(x)' }}"{% if loop.first %} id="formula"{% endif %}>
+        <input type="color" class="color-pick" value="{{ colors[loop.index0] }}" title="Pick this formula's line colour">
+        <button type="button" class="row-del" title="Remove this formula"{% if formulas|length == 1 %} hidden{% endif %}>&times;</button>
       </div>
       {% endfor %}
     </div>
@@ -1535,12 +1537,47 @@ function canvasDblClick() { view = null; redraw(); }
 
 /* ================= multi-formula state & colours ================= */
 
-// Fixed line colours, one per formula (max 5), assigned by index.
+// Default colours offered to a NEW row, in row order. Each row owns its
+// colour through its own <input type="color"> picker; rows keep their chosen
+// colour when rows are added/removed (no reshuffle). The server pads missing
+// `color=` params from this same palette (see app/main.py CURVE_PALETTE).
 const CURVE_PALETTE = ['#dc2626', '#16a34a', '#2563eb', '#0891b2', '#0d9488'];
-let curveColors = [];
 
-function assignColors(n) {
-  curveColors = CURVE_PALETTE.slice(0, n);
+// The palette colour for URL position i (positions roll over past 5 rows).
+function paletteAt(i) { return CURVE_PALETTE[i % CURVE_PALETTE.length]; }
+
+// A palette colour not already in use by another row (falls back to cycling).
+function nextFreeColor() {
+  const used = new Set();
+  document.querySelectorAll('#formulaRows .color-pick').forEach(function (p) { used.add(p.value); });
+  for (let i = 0; i < CURVE_PALETTE.length; i++) {
+    if (!used.has(CURVE_PALETTE[i])) return CURVE_PALETTE[i];
+  }
+  return paletteAt(document.querySelectorAll('#formulaRows .formula-row').length);
+}
+
+// Colour for each formula in collectFormulas() order — the FIRST row that
+// carries a formula decides its colour (duplicate rows share the curve).
+function collectColors() {
+  const colors = [];
+  const byFormula = {};
+  document.querySelectorAll('#formulaRows .formula-row').forEach(function (row) {
+    const v = row.querySelector('.formula-input').value.trim();
+    if (!v || byFormula[v]) return;
+    byFormula[v] = true;
+    colors.push(row.querySelector('.color-pick').value);
+  });
+  return colors;
+}
+
+// The formula texts of the last successful plot — live recolor only applies
+// when the rows still match what is on screen; otherwise it triggers plot().
+let lastPlottedFormulas = [];
+
+function colorsMatchRows() {
+  const f = collectFormulas();
+  return f.length === lastPlottedFormulas.length &&
+    f.every(function (v, i) { return v === lastPlottedFormulas[i]; });
 }
 
 // The formula row the user last worked in — chips fill this row, falling
@@ -1607,9 +1644,11 @@ function addFormulaRow(value) {
   input.autocomplete = 'off';
   input.placeholder = mode === 'polar' ? 'e.g. r = 2\u03b8' : 'e.g. y = cos(x)';
   if (value) input.value = value;
-  const dot = document.createElement('span');
-  dot.className = 'color-dot';
-  dot.title = 'line colour';
+  const pick = document.createElement('input');
+  pick.type = 'color';
+  pick.className = 'color-pick';
+  pick.title = "Pick this formula's line colour";
+  pick.value = nextFreeColor();
   const del = document.createElement('button');
   del.type = 'button';
   del.className = 'row-del';
@@ -1617,7 +1656,7 @@ function addFormulaRow(value) {
   del.textContent = '\u00d7';
   del.addEventListener('click', function () { row.remove(); onRowsChanged(); });
   row.appendChild(input);
-  row.appendChild(dot);
+  row.appendChild(pick);
   row.appendChild(del);
   rows.appendChild(row);
   input.focus();
@@ -1628,20 +1667,25 @@ function onRowsChanged() {
   const rows = document.querySelectorAll('#formulaRows .formula-row');
   document.getElementById('addFormulaBtn').style.display = rows.length >= 5 ? 'none' : '';
   rows.forEach(function (r) { r.querySelector('.row-del').hidden = rows.length === 1; });
-  const n = collectFormulas().length;
-  if (n !== curveColors.length) assignColors(n || 1);
-  refreshDots();
 }
 
-// Each row's dot shows the colour its formula will get (gray = empty/dupe).
-function refreshDots() {
+// Re-colour the plotted curves (canvas, legend, table) from the current row
+// pickers. Keeps the current view/zoom — geometry hasn't changed.
+function applyPickerColours() {
   const formulas = collectFormulas();
-  document.querySelectorAll('#formulaRows .formula-row').forEach(function (row) {
-    const dot = row.querySelector('.color-dot');
-    const v = row.querySelector('.formula-input').value.trim();
-    const idx = formulas.indexOf(v);
-    dot.style.background = idx >= 0 ? curveColors[idx] : '';
-  });
+  const colors = collectColors();
+  if (!formulas.length) return;
+  if (formulas.length !== colors.length) return;
+  if (colorsMatchRows()) {
+    lastCurves.forEach(function (c, i) { c.color = colors[i]; });
+    redraw();
+    renderLegend(lastCurves);
+    renderTable(lastCurves, colors);
+  } else {
+    plot();   // rows changed since the last plot — full replot
+    return;
+  }
+  try { history.replaceState(null, '', '?' + rangeParams(formulas).toString()); } catch (e) {}
 }
 
 /* ================= UI ================= */
@@ -1762,15 +1806,20 @@ function rangeParams(formulas) {
   if (xMin !== '') p.set('x_min', xMin);
   if (xMax !== '') p.set('x_max', xMax);
   if (xStep !== '') p.set('x_step', xStep);
+  // Colour params — only where a row's colour differs from the palette
+  // default for its URL position (the server re-pads defaults on load).
+  collectColors().forEach(function (c, i) {
+    if (c !== paletteAt(i)) p.append('color', c);
+  });
   return p;
 }
 
 async function plot() {
   const seq = ++plotSeq;
   const formulas = collectFormulas();
+  const colors = collectColors();
   let data = null, errMsg = null;
   if (!formulas.length) { showError('Enter a formula first.'); document.getElementById('solved').textContent = ''; return; }
-  if (curveColors.length !== formulas.length) assignColors(formulas.length);
   const qp = rangeParams(formulas);
   // Keep the query string in sync with the input immediately on click, so the
   // URL always reproduces what was typed (works even when the plot errors).
@@ -1837,18 +1886,18 @@ async function plot() {
     '    (plotted for ' + rangeVar + ' = ' + rng.min + ' \u2026 ' + rng.max + stepNote + multiNote + ')';
   const curves = data.curves.map(function (c, i) {
     return {
-      color: curveColors[i % curveColors.length],
+      color: colors[i] || paletteAt(i),
       display: c.display,
       branches: c.branches,
       inequality: c.inequality,
     };
   });
   lastCurves = curves;
+  lastPlottedFormulas = formulas.slice();
   view = null;
   draw(curves);
-  renderTable(data.curves, curveColors);
+  renderTable(data.curves, colors);
   renderLegend(curves);
-  refreshDots();
   const nPts = curves.reduce(function (n, c) {
     return n + c.branches.reduce(function (m, b) { return m + b.points.length; }, 0);
   }, 0);
@@ -1954,6 +2003,13 @@ function init() {
   document.getElementById('formulaRows').addEventListener('focusin', function (e) {
     if (e.target && e.target.classList && e.target.classList.contains('formula-input')) {
       activeFormulaInput = e.target;
+    }
+  });
+  // A row colour change recolours that formula's curve live (canvas, legend,
+  // table) and keeps the shareable URL in sync.
+  document.getElementById('formulaRows').addEventListener('input', function (e) {
+    if (e.target && e.target.classList && e.target.classList.contains('color-pick')) {
+      applyPickerColours();
     }
   });
   document.getElementById('pngBtn').addEventListener('click', exportPng);

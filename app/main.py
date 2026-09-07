@@ -34,6 +34,10 @@ MODES = {"cartesian", "polar"}
 # keeps the two in lockstep.
 CURVE_PALETTE = ["#dc2626", "#16a34a", "#2563eb", "#0891b2", "#0d9488"]
 _COLOR_RE = re.compile(r"^#[0-9a-f]{6}$")
+# A per-row centre offset (cx, cy), default 0,0. Accepts plain decimals
+# and scientific notation so whatever a type=number input produced
+# round-trips through the share URL unchanged.
+_CENTER_RE = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
 
 # ---------------------------------------------------------------------------
 # Caching: small in-process TTL cache for /api/points responses.
@@ -154,6 +158,23 @@ def _clean_colors(raw: list[str], n: int) -> list[str]:
     return colors
 
 
+def _clean_centers(raw_x: list[str], raw_y: list[str], n: int) -> list[tuple[str, str]]:
+    """Validate repeated `cx`/`cy` params and pair them up per row.
+
+    Each row's centre defaults to ``(0, 0)`` — an empty/invalid value
+    becomes ``""`` (the template renders it as a blank input whose
+    placeholder reads 0). Values are kept as strings (never re-parsed
+    through float) so they round-trip through the share URL exactly as
+    typed. A malformed param can therefore never inject markup.
+    """
+    centers = []
+    for i in range(n):
+        x = raw_x[i].strip() if i < len(raw_x) else ""
+        y = raw_y[i].strip() if i < len(raw_y) else ""
+        centers.append((x if _CENTER_RE.fullmatch(x) else "", y if _CENTER_RE.fullmatch(y) else ""))
+    return centers
+
+
 def _check_mode(mode: str) -> None:
     if mode not in MODES:
         raise HTTPException(status_code=400, detail="mode must be 'cartesian' or 'polar'.")
@@ -164,6 +185,8 @@ def index(
     request: Request,
     formula: list[str] = Query(default=[DEFAULT_FORMULA]),
     color: list[str] = Query(default=[]),
+    cx: list[str] = Query(default=[]),
+    cy: list[str] = Query(default=[]),
     mode: str = "cartesian",
     x_min: str | None = None,
     x_max: str | None = None,
@@ -174,12 +197,15 @@ def index(
     Repeated ``?formula=…&formula=…`` params pre-fill multiple formula rows
     (capped at MAX_FORMULAS for rendering). ``mode`` selects the tab
     (``cartesian`` or ``polar``) and is kept in the shareable URL. Optional
-    repeated ``?color=#rrggbb`` params pre-fill each row's colour picker.
+    repeated ``?color=#rrggbb`` params pre-fill each row's colour picker,
+    and repeated ``?cx=…&cy=…`` params pre-fill each row's centre offset
+    (default 0,0).
     """
     global _page_hits
     _check_mode(mode)
     formulas = _clean_formulas(formula) or [DEFAULT_FORMULA]
     colors = _clean_colors(color, len(formulas))
+    centers = _clean_centers(cx, cy, len(formulas))
     with _metrics_lock:
         _page_hits += 1
     hits = _page_hits
@@ -189,6 +215,7 @@ def index(
         context={
             "formulas": formulas[:MAX_FORMULAS],
             "colors": colors[:MAX_FORMULAS],
+            "centers": centers[:MAX_FORMULAS],
             "mode": mode,
             "x_min": x_min or "",
             "x_max": x_max or "",

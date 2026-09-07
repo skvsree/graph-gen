@@ -90,6 +90,56 @@ def test_index_color_param_never_injects_markup():
     assert "<script>alert(1)</script>" not in r.text
 
 
+def test_index_renders_centre_inputs_per_formula():
+    # Each row carries a centre-x and centre-y field, both defaulting to
+    # blank (= 0,0 — the input's placeholder reads 0).
+    r = client.get("/", params=[("formula", "y = x"), ("formula", "y = 2x")])
+    assert r.status_code == 200
+    assert r.text.count('class="ctr-x"') == 2
+    assert r.text.count('class="ctr-y"') == 2
+    assert 'value="" placeholder="0"' in r.text.replace("\n", "")
+
+
+def test_index_prefills_centre_params_in_order():
+    r = client.get(
+        "/",
+        params=[
+            ("formula", "y = x"),
+            ("formula", "y = 2x"),
+            ("cx", "2.5"),
+            ("cx", "-1"),
+            ("cy", "3"),
+        ],
+    )
+    assert r.status_code == 200
+    # Row 0: centre (2.5, 3); row 1: centre (-1, <blank default>).
+    assert 'value="2.5"' in r.text
+    assert 'value="3"' in r.text
+    assert 'value="-1"' in r.text
+
+
+def test_index_centre_params_fallback_to_zero():
+    # Invalid + missing centre params fall back to the blank (0,0) default
+    # for that position; a param can never inject markup.
+    r = client.get(
+        "/",
+        params=[("formula", "y = x"), ("cx", "not-a-number"), ("cx", '"><script>alert(1)</script>'), ("cy", "3")],
+    )
+    assert r.status_code == 200
+    assert "<script>alert(1)</script>" not in r.text
+    # cx[0] invalid -> blank (value=""); cy[0] = 3 still lands on row 0.
+    assert 'id="ctrX0" value=""' in r.text
+    assert 'id="ctrY0" value="3"' in r.text
+
+
+def test_index_centre_params_pad_when_fewer_than_rows():
+    # One cx/cy pair for two rows: the second row keeps its default.
+    r = client.get("/", params=[("formula", "y = x"), ("formula", "y = 2x"), ("cx", "4"), ("cy", "5")])
+    assert r.status_code == 200
+    assert 'id="ctrX0" value="4"' in r.text and 'id="ctrY0" value="5"' in r.text
+    assert 'id="ctrX1" value=""' in r.text and 'id="ctrY1" value=""' in r.text
+
+
 def test_template_palette_matches_js_palette():
     # The server's CURVE_PALETTE and the template's must stay in lockstep so a
     # URL without color= params renders the same defaults the client expects.

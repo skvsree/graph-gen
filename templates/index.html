@@ -53,6 +53,13 @@
   .range-label { color: var(--muted); font-size: 13px; }
   #formulaRows { display: flex; flex-direction: column; gap: 8px; width: 100%; }
   .formula-row { display: flex; gap: 8px; align-items: center; width: 100%; }
+  /* Per-formula centre offset: where this curve's own (0,0) sits on the
+     graph (default 0,0). x/y micro-labels stack above the inputs. */
+  .ctr { display: inline-flex; align-items: flex-end; gap: 6px; flex: none; }
+  .ctr-axis { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; }
+  .ctr-lbl { font-size: 10.5px; line-height: 1; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .ctr input[type=number] { width: 64px; padding: 8px 6px; text-align: center; }
+  .ctr input[type=number]::-webkit-inner-spin-button { opacity: 0.4; }
   .color-dot {
     width: 14px; height: 14px; border-radius: 50%; flex: none;
     background: var(--border); border: 1px solid var(--muted);
@@ -155,6 +162,16 @@
       <div class="formula-row">
         <input type="text" class="formula-input" value="{{ f }}" spellcheck="false" autocomplete="off" placeholder="e.g. y = {{ 'sin(x)' if loop.first else 'cos(x)' }}"{% if loop.first %} id="formula"{% endif %}>
         <input type="color" class="color-pick" value="{{ colors[loop.index0] }}" title="Pick this formula's line colour">
+        <span class="ctr" title="This formula's own centre (default 0,0) — the point on the graph where its (0,0) sits; every point of the curve is shifted by this offset">
+          <span class="ctr-axis">
+            <label class="ctr-lbl" for="ctrX{{ loop.index0 }}">x</label>
+            <input type="number" class="ctr-x" id="ctrX{{ loop.index0 }}" value="{{ centers[loop.index0][0] }}" placeholder="0" min="-1000000" max="1000000" step="any">
+          </span>
+          <span class="ctr-axis">
+            <label class="ctr-lbl" for="ctrY{{ loop.index0 }}">y</label>
+            <input type="number" class="ctr-y" id="ctrY{{ loop.index0 }}" value="{{ centers[loop.index0][1] }}" placeholder="0" min="-1000000" max="1000000" step="any">
+          </span>
+        </span>
         <button type="button" class="row-del" title="Remove this formula"{% if formulas|length == 1 %} hidden{% endif %}>&times;</button>
       </div>
       {% endfor %}
@@ -1556,28 +1573,22 @@ function nextFreeColor() {
   return paletteAt(document.querySelectorAll('#formulaRows .formula-row').length);
 }
 
-// Colour for each formula in collectFormulas() order — the FIRST row that
-// carries a formula decides its colour (duplicate rows share the curve).
+// Colour for each curve in spec order. Two rows plotting the SAME formula
+// at the SAME centre collapse into one curve (first row's colour wins);
+// identical formulas at different centres are distinct curves now.
 function collectColors() {
-  const colors = [];
-  const byFormula = {};
-  document.querySelectorAll('#formulaRows .formula-row').forEach(function (row) {
-    const v = row.querySelector('.formula-input').value.trim();
-    if (!v || byFormula[v]) return;
-    byFormula[v] = true;
-    colors.push(row.querySelector('.color-pick').value);
-  });
-  return colors;
+  return collectSpecs().map(function (s) { return s.color; });
 }
 
-// The formula texts of the last successful plot — live recolor only applies
-// when the rows still match what is on screen; otherwise it triggers plot().
-let lastPlottedFormulas = [];
+// The specs of the last successful plot, as dedupe keys (formula|centre) —
+// live recolor only applies when the rows still match what is on screen
+// (same formulas AND centres); any other change triggers a full plot().
+let lastPlottedKeys = [];
 
 function colorsMatchRows() {
-  const f = collectFormulas();
-  return f.length === lastPlottedFormulas.length &&
-    f.every(function (v, i) { return v === lastPlottedFormulas[i]; });
+  const k = collectSpecs().map(function (s) { return s.key; });
+  return k.length === lastPlottedKeys.length &&
+    k.every(function (v, i) { return v === lastPlottedKeys[i]; });
 }
 
 // The formula row the user last worked in — chips fill this row, falling
@@ -1622,14 +1633,42 @@ function setMode(m) {
   plot();
 }
 
+// Parse a centre input's value (blank/invalid -> 0 — the default centre).
+function ctrNum(v) {
+  const t = String(v == null ? '' : v).trim();
+  if (t === '') return 0;
+  const n = parseFloat(t);
+  return isFinite(n) ? n : 0;
+}
+
+// The per-row "curve specs" in row order, deduped on formula + centre
+// (identical rows collapse; the same formula at a different centre is a
+// separate curve). Every downstream list — formulas, colours, centres —
+// derives from here so they always stay index-aligned.
+function collectSpecs() {
+  const specs = [];
+  const seen = {};
+  document.querySelectorAll('#formulaRows .formula-row').forEach(function (row) {
+    const f = row.querySelector('.formula-input').value.trim();
+    if (!f) return;
+    const cx = ctrNum(row.querySelector('.ctr-x').value);
+    const cy = ctrNum(row.querySelector('.ctr-y').value);
+    const key = f + '|' + cx + '|' + cy;
+    if (seen[key]) return;
+    seen[key] = true;
+    specs.push({ formula: f, cx: cx, cy: cy, color: row.querySelector('.color-pick').value, key: key });
+  });
+  return specs;
+}
+
 // Non-empty, deduped list of formulas from the input rows (max 5 rows in UI).
 function collectFormulas() {
-  const out = [];
-  document.querySelectorAll('#formulaRows .formula-input').forEach(function (inp) {
-    const v = inp.value.trim();
-    if (v && out.indexOf(v) === -1) out.push(v);
-  });
-  return out;
+  return collectSpecs().map(function (s) { return s.formula; });
+}
+
+// (cx, cy) per curve, aligned with collectFormulas()/collectColors().
+function collectCenters() {
+  return collectSpecs().map(function (s) { return { x: s.cx, y: s.cy }; });
 }
 
 function addFormulaRow(value) {
@@ -1649,6 +1688,30 @@ function addFormulaRow(value) {
   pick.className = 'color-pick';
   pick.title = "Pick this formula's line colour";
   pick.value = nextFreeColor();
+  // Centre offset fields (default 0,0) — where this curve's own (0,0) sits.
+  const ctr = document.createElement('span');
+  ctr.className = 'ctr';
+  ctr.title = "This formula's own centre (default 0,0) — the point on the graph where its (0,0) sits; every point of the curve is shifted by this offset";
+  const mkAxis = function (cls, lbl) {
+    const axis = document.createElement('span');
+    axis.className = 'ctr-axis';
+    const l = document.createElement('label');
+    l.className = 'ctr-lbl';
+    l.textContent = lbl;
+    const n = document.createElement('input');
+    n.type = 'number';
+    n.className = cls;
+    n.placeholder = '0';
+    n.min = '-1000000';
+    n.max = '1000000';
+    n.step = 'any';
+    axis.appendChild(l);
+    axis.appendChild(n);
+    ctr.appendChild(axis);
+    return n;
+  };
+  const ctrX = mkAxis('ctr-x', 'x');
+  const ctrY = mkAxis('ctr-y', 'y');
   const del = document.createElement('button');
   del.type = 'button';
   del.className = 'row-del';
@@ -1657,6 +1720,7 @@ function addFormulaRow(value) {
   del.addEventListener('click', function () { row.remove(); onRowsChanged(); });
   row.appendChild(input);
   row.appendChild(pick);
+  row.appendChild(ctr);
   row.appendChild(del);
   rows.appendChild(row);
   input.focus();
@@ -1690,6 +1754,12 @@ function applyPickerColours() {
 
 /* ================= UI ================= */
 
+// " · centre (cx, cy)" for curves whose centre isn't the default 0,0.
+function centreLabel(c) {
+  if ((!c || (c.cx === 0 && c.cy === 0))) return '';
+  return '  · centre (' + fmt(c.cx) + ', ' + fmt(c.cy) + ')';
+}
+
 function renderTable(curves, colors) {
   const tb = document.getElementById('points');
   const polar = mode === 'polar';
@@ -1700,7 +1770,7 @@ function renderTable(curves, colors) {
     const color = (colors && colors[ci]) || '#2563eb';
     html += '<tr class="branch-hdr"><td colspan="2">' +
       '<span class="dot-inline" style="background:' + color + '"></span>' +
-      c.display + '</td></tr>';
+      c.display + centreLabel(c) + '</td></tr>';
     c.branches.forEach(function (br) {
       if (c.branches.length > 1) {
         html += '<tr class="branch-hdr"><td colspan="2">&nbsp;&nbsp;branch ' + br.label + '</td></tr>';
@@ -1724,7 +1794,7 @@ function renderLegend(curves) {
     dot.className = 'color-dot';
     dot.style.background = c.color;
     const label = document.createElement('span');
-    label.textContent = c.display + (c.inequality ? '  ' + c.inequality.op : '');
+    label.textContent = c.display + (c.inequality ? '  ' + c.inequality.op : '') + centreLabel(c);
     item.appendChild(dot);
     item.appendChild(label);
     lg.appendChild(item);
@@ -1806,11 +1876,15 @@ function rangeParams(formulas) {
   if (xMin !== '') p.set('x_min', xMin);
   if (xMax !== '') p.set('x_max', xMax);
   if (xStep !== '') p.set('x_step', xStep);
-  // Colour params — only where a row's colour differs from the palette
-  // default for its URL position (the server re-pads defaults on load).
-  collectColors().forEach(function (c, i) {
-    if (c !== paletteAt(i)) p.append('color', c);
-  });
+  // Colour + centre params, aligned with the deduped spec list. When ANY
+  // row differs from its default, the FULL list is sent — an earlier
+  // default row must keep its position so later rows don't shift on
+  // reload (sending only the non-defaults would misalign by index).
+  const specs = collectSpecs();
+  const anyColor = specs.some(function (s, i) { return s.color !== paletteAt(i); });
+  if (anyColor) specs.forEach(function (s) { p.append('color', s.color); });
+  const anyCenter = specs.some(function (s) { return s.cx !== 0 || s.cy !== 0; });
+  if (anyCenter) specs.forEach(function (s) { p.append('cx', s.cx); p.append('cy', s.cy); });
   return p;
 }
 
@@ -1884,19 +1958,38 @@ async function plot() {
   document.getElementById('solved').textContent =
     'Given:  ' + given + '    \u2192    ' + displays +
     '    (plotted for ' + rangeVar + ' = ' + rng.min + ' \u2026 ' + rng.max + stepNote + multiNote + ')';
+  // Canvas model: curve + colour + centre. Points are shifted by the row's
+  // centre (cx, cy) — that formula's own (0,0) sits at (cx, cy) on the
+  // shared plane. Polar θ/r table columns keep the formula's own frame.
+  const centers = collectCenters();
   const curves = data.curves.map(function (c, i) {
+    const cx = (centers[i] && centers[i].x) || 0;
+    const cy = (centers[i] && centers[i].y) || 0;
+    const off = cx !== 0 || cy !== 0;
+    const branches = off ? c.branches.map(function (br) {
+      return {
+        label: br.label,
+        points: br.points.map(function (p) {
+          const q = { x: p.x + cx, y: p.y + cy };
+          if (p.theta !== undefined) { q.theta = p.theta; q.r = p.r; }
+          return q;
+        }),
+      };
+    }) : c.branches;
     return {
       color: colors[i] || paletteAt(i),
       display: c.display,
-      branches: c.branches,
+      branches: branches,
       inequality: c.inequality,
+      cx: cx,
+      cy: cy,
     };
   });
   lastCurves = curves;
-  lastPlottedFormulas = formulas.slice();
+  lastPlottedKeys = collectSpecs().map(function (s) { return s.key; });
   view = null;
   draw(curves);
-  renderTable(data.curves, colors);
+  renderTable(curves, colors);
   renderLegend(curves);
   const nPts = curves.reduce(function (n, c) {
     return n + c.branches.reduce(function (m, b) { return m + b.points.length; }, 0);
@@ -2010,6 +2103,14 @@ function init() {
   document.getElementById('formulaRows').addEventListener('input', function (e) {
     if (e.target && e.target.classList && e.target.classList.contains('color-pick')) {
       applyPickerColours();
+    }
+  });
+  // A centre change moves the curve — replot on commit (Enter or blur), not
+  // per keystroke while typing the offset.
+  document.getElementById('formulaRows').addEventListener('change', function (e) {
+    if (e.target && e.target.classList &&
+        (e.target.classList.contains('ctr-x') || e.target.classList.contains('ctr-y'))) {
+      plot();
     }
   });
   document.getElementById('pngBtn').addEventListener('click', exportPng);

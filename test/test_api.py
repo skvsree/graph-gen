@@ -90,6 +90,51 @@ def test_index_color_param_never_injects_markup():
     assert "<script>alert(1)</script>" not in r.text
 
 
+def test_index_renders_opacity_inputs_per_formula():
+    # Each row carries an opacity field (percent of its colour), defaulting
+    # to 100 = fully opaque.
+    r = client.get("/", params=[("formula", "y = x"), ("formula", "y = 2x")])
+    assert r.status_code == 200
+    assert r.text.count('class="opacity-pick"') == 2
+    assert r.text.count('value="100"') == 2  # both rows opaque by default
+
+
+def test_index_prefills_opacity_params_in_order():
+    r = client.get(
+        "/",
+        params=[("formula", "y = x"), ("formula", "y = 2x"), ("op", "25"), ("op", "60")],
+    )
+    assert r.status_code == 200
+    assert 'id="op0" value="25"' in r.text
+    assert 'id="op1" value="60"' in r.text
+
+
+def test_index_opacity_params_fallback_to_100():
+    # Invalid + out-of-range op params fall back to 100 for that position.
+    r = client.get(
+        "/",
+        params=[("formula", "y = x"), ("formula", "y = 2x"), ("op", "not-a-number"), ("op", "500")],
+    )
+    assert r.status_code == 200
+    assert 'id="op0" value="100"' in r.text  # invalid -> default
+    assert 'id="op1" value="100"' in r.text  # out of range -> default
+
+
+def test_index_opacity_params_pad_when_fewer_than_rows():
+    # One op param for two rows: the second row keeps its default (100).
+    r = client.get("/", params=[("formula", "y = x"), ("formula", "y = 2x"), ("op", "40")])
+    assert r.status_code == 200
+    assert 'id="op0" value="40"' in r.text
+    assert 'id="op1" value="100"' in r.text
+
+
+def test_index_opacity_param_never_injects_markup():
+    r = client.get("/", params=[("formula", "y = x"), ("op", '"><script>alert(1)</script>')])
+    assert r.status_code == 200
+    assert "<script>alert(1)</script>" not in r.text
+    assert 'id="op0" value="100"' in r.text
+
+
 def test_index_renders_centre_inputs_per_formula():
     # Each row carries a centre-x and centre-y field, both defaulting to
     # blank (= 0,0 — the input's placeholder reads 0).

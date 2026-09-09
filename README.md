@@ -20,11 +20,13 @@ to reset**. A theme toggle (dark/light, persisted) and a grid on/off toggle sit
 next to the plot button, and every successful plot is remembered in a
 localStorage history row (last 12, click a chip to re-plot, ✕ clear).
 
-**Plot up to 5 formulas at once** ("+ Add formula" adds an input row). Lines
-get **fixed colours by index** — red, green, blue, cyan, teal — so curve 1 is
-always red, curve 2 always green, and so on. A legend renders above the graph,
-and the points table is grouped per formula. The shareable URL carries the
-formulas as repeated `formula=` params:
+**Plot up to 5 formulas at once** ("+ Add formula" adds an input row). Each
+row owns its curve's **colour** (native picker) and **line opacity** (a
+percent field, 0–100, default 100) — fade overlapping curves to see
+intersections; the canvas stroke, point markers, legend/table swatches and
+inequality shading all follow the row's opacity. The shareable URL carries the
+formulas as repeated `formula=` params plus non-default `color=`/`op=`
+params:
 `/?formula=y%3Dsin(x)&formula=y%3Dcos(x)&x_min=0&x_max=6.28`. One shared
 x-range/step applies to all curves.
 

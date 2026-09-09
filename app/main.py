@@ -33,6 +33,7 @@ MODES = {"cartesian", "polar"}
 # `CURVE_PALETTE` array in templates/index.html — test_template_palette_matches_js
 # keeps the two in lockstep.
 CURVE_PALETTE = ["#dc2626", "#16a34a", "#2563eb", "#0891b2", "#0d9488"]
+DEFAULT_OPACITY = 100  # per-row line opacity in percent (0..100), default opaque
 _COLOR_RE = re.compile(r"^#[0-9a-f]{6}$")
 # A per-row centre offset (cx, cy), default 0,0. Accepts plain decimals
 # and scientific notation so whatever a type=number input produced
@@ -158,6 +159,26 @@ def _clean_colors(raw: list[str], n: int) -> list[str]:
     return colors
 
 
+def _clean_opacities(raw: list[str], n: int) -> list[int]:
+    """Validate repeated `op` params (percent 0..100) and pad to length n.
+
+    Invalid/missing entries fall back to ``DEFAULT_OPACITY`` (100 = fully
+    opaque) for that row position. Only ints are ever emitted, so an `op`
+    param can never inject markup into the page.
+    """
+    ops = []
+    for i in range(n):
+        v = raw[i].strip() if i < len(raw) else ""
+        try:
+            o = int(v)
+        except ValueError:
+            o = DEFAULT_OPACITY
+        if not 0 <= o <= 100:
+            o = DEFAULT_OPACITY
+        ops.append(o)
+    return ops
+
+
 def _clean_centers(raw_x: list[str], raw_y: list[str], n: int) -> list[tuple[str, str]]:
     """Validate repeated `cx`/`cy` params and pair them up per row.
 
@@ -185,6 +206,7 @@ def index(
     request: Request,
     formula: list[str] = Query(default=[DEFAULT_FORMULA]),
     color: list[str] = Query(default=[]),
+    op: list[str] = Query(default=[]),
     cx: list[str] = Query(default=[]),
     cy: list[str] = Query(default=[]),
     mode: str = "cartesian",
@@ -198,13 +220,15 @@ def index(
     (capped at MAX_FORMULAS for rendering). ``mode`` selects the tab
     (``cartesian`` or ``polar``) and is kept in the shareable URL. Optional
     repeated ``?color=#rrggbb`` params pre-fill each row's colour picker,
-    and repeated ``?cx=…&cy=…`` params pre-fill each row's centre offset
-    (default 0,0).
+    repeated ``?op=…`` params pre-fill each row's line opacity (percent
+    0..100, default 100), and repeated ``?cx=…&cy=…`` params pre-fill each
+    row's centre offset (default 0,0).
     """
     global _page_hits
     _check_mode(mode)
     formulas = _clean_formulas(formula) or [DEFAULT_FORMULA]
     colors = _clean_colors(color, len(formulas))
+    opacities = _clean_opacities(op, len(formulas))
     centers = _clean_centers(cx, cy, len(formulas))
     with _metrics_lock:
         _page_hits += 1
@@ -215,6 +239,7 @@ def index(
         context={
             "formulas": formulas[:MAX_FORMULAS],
             "colors": colors[:MAX_FORMULAS],
+            "opacities": opacities[:MAX_FORMULAS],
             "centers": centers[:MAX_FORMULAS],
             "mode": mode,
             "x_min": x_min or "",

@@ -162,6 +162,12 @@
       <div class="formula-row">
         <input type="text" class="formula-input" value="{{ f }}" spellcheck="false" autocomplete="off" placeholder="e.g. y = {{ 'sin(x)' if loop.first else 'cos(x)' }}"{% if loop.first %} id="formula"{% endif %}>
         <input type="color" class="color-pick" value="{{ colors[loop.index0] }}" title="Pick this formula's line colour">
+        <span class="ctr op-ctr" title="This formula's line opacity in percent of its colour (0–100, default 100 = fully opaque)">
+          <span class="ctr-axis">
+            <label class="ctr-lbl" for="op{{ loop.index0 }}">%</label>
+            <input type="number" class="opacity-pick" id="op{{ loop.index0 }}" value="{{ opacities[loop.index0] }}" placeholder="100" min="0" max="100" step="5">
+          </span>
+        </span>
         <span class="ctr" title="This formula's own centre (default 0,0) — the point on the graph where its (0,0) sits; every point of the curve is shifted by this offset">
           <span class="ctr-axis">
             <label class="ctr-lbl" for="ctrX{{ loop.index0 }}">x</label>
@@ -1364,9 +1370,12 @@ function draw(curves) {
   curves.forEach(function (curve) {
     // Inequality shading first (translucent fill), then the crisp boundary.
     if (curve.inequality) drawInequalityShade(ctx, curve, X, Y, W, H);
+    // Stroke at the row's chosen opacity: 'rgba(...)' colour so the alpha
+    // applies to this curve's own pixels only (no globalAlpha save/restore).
+    const curveColor = colorWithAlpha(curve.color, opToAlpha(curve.opacity));
     curve.branches.forEach(function (br) {
       if (!br.points.length) return;
-      ctx.strokeStyle = curve.color;
+      ctx.strokeStyle = curveColor;
       ctx.lineWidth = 2.5;
       ctx.lineJoin = 'round';
       ctx.lineCap = 'round';
@@ -1384,7 +1393,7 @@ function draw(curves) {
       // Point markers — only when the unit spacing is wide enough that they
       // don't merge into a solid ribbon.
       if (unit >= 6) {
-        ctx.fillStyle = curve.color;
+        ctx.fillStyle = curveColor;
         for (const p of br.points) {
           const px = X(p.x), py = Y(p.y);
           if (px < 0 || px > W || py < 0 || py > H) continue;
@@ -1405,7 +1414,9 @@ function draw(curves) {
 function drawInequalityShade(ctx, curve, X, Y, W, H) {
   const ineq = curve.inequality;
   const side = ineq.side;
-  const alpha = 0.25;
+  // Base translucent tint (25%), scaled by the row's chosen line opacity so
+  // a faded formula's shaded region fades with it.
+  const alpha = 0.25 * opToAlpha(curve.opacity);
   const topY = 0, bottomY = H;  // screen-space edges of the canvas
 
   const fillAbove = (br) => {
@@ -1563,6 +1574,28 @@ const CURVE_PALETTE = ['#dc2626', '#16a34a', '#2563eb', '#0891b2', '#0d9488'];
 // The palette colour for URL position i (positions roll over past 5 rows).
 function paletteAt(i) { return CURVE_PALETTE[i % CURVE_PALETTE.length]; }
 
+// Per-row line opacity, in percent of the row's colour (0..100). 100 = fully
+// opaque. Mirrored server-side as DEFAULT_OPACITY in app/main.py.
+const DEFAULT_OPACITY = 100;
+
+// Opacity percent -> canvas alpha (0..1). Blank/invalid -> fully opaque.
+function opToAlpha(op) {
+  const n = (op === undefined || op === null) ? DEFAULT_OPACITY : Number(op);
+  if (!isFinite(n)) return 1;
+  return Math.min(1, Math.max(0, n / 100));
+}
+
+// '#rrggbb' (or an existing rgba string) -> 'rgba(r, g, b, a)' at the given
+// alpha. Strokes use rgba so each curve's opacity only affects its own
+// pixels (no ctx.globalAlpha save/restore around every branch).
+function colorWithAlpha(hex, alpha) {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  return 'rgba(' + (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' +
+    Math.round(alpha * 1000) / 1000 + ')';
+}
+
 // A palette colour not already in use by another row (falls back to cycling).
 function nextFreeColor() {
   const used = new Set();
@@ -1641,6 +1674,16 @@ function ctrNum(v) {
   return isFinite(n) ? n : 0;
 }
 
+// Parse an opacity input's value (percent, 0..100). Blank/invalid clamp to
+// 100 (fully opaque — the default); out-of-range clamps into 0..100.
+function opNum(v) {
+  const t = String(v == null ? '' : v).trim();
+  if (t === '') return DEFAULT_OPACITY;
+  const n = parseInt(t, 10);
+  if (!isFinite(n)) return DEFAULT_OPACITY;
+  return Math.min(100, Math.max(0, n));
+}
+
 // The per-row "curve specs" in row order, deduped on formula + centre
 // (identical rows collapse; the same formula at a different centre is a
 // separate curve). Every downstream list — formulas, colours, centres —
@@ -1656,7 +1699,7 @@ function collectSpecs() {
     const key = f + '|' + cx + '|' + cy;
     if (seen[key]) return;
     seen[key] = true;
-    specs.push({ formula: f, cx: cx, cy: cy, color: row.querySelector('.color-pick').value, key: key });
+    specs.push({ formula: f, cx: cx, cy: cy, color: row.querySelector('.color-pick').value, op: opNum(row.querySelector('.opacity-pick').value), key: key });
   });
   return specs;
 }
@@ -1688,6 +1731,27 @@ function addFormulaRow(value) {
   pick.className = 'color-pick';
   pick.title = "Pick this formula's line colour";
   pick.value = nextFreeColor();
+  // Line opacity in percent (0–100, default 100 = fully opaque). Mirrors
+  // the server-rendered `.opacity-pick` in each template row.
+  const opWrap = document.createElement('span');
+  opWrap.className = 'ctr';
+  opWrap.title = "This formula's line opacity in percent of its colour (0–100, default 100 = fully opaque)";
+  const opAxis = document.createElement('span');
+  opAxis.className = 'ctr-axis';
+  const opLbl = document.createElement('label');
+  opLbl.className = 'ctr-lbl';
+  opLbl.textContent = '%';
+  const op = document.createElement('input');
+  op.type = 'number';
+  op.className = 'opacity-pick';
+  op.placeholder = '100';
+  op.min = '0';
+  op.max = '100';
+  op.step = '5';
+  op.value = String(DEFAULT_OPACITY);
+  opAxis.appendChild(opLbl);
+  opAxis.appendChild(op);
+  opWrap.appendChild(opAxis);
   // Centre offset fields (default 0,0) — where this curve's own (0,0) sits.
   const ctr = document.createElement('span');
   ctr.className = 'ctr';
@@ -1720,6 +1784,7 @@ function addFormulaRow(value) {
   del.addEventListener('click', function () { row.remove(); onRowsChanged(); });
   row.appendChild(input);
   row.appendChild(pick);
+  row.appendChild(opWrap);
   row.appendChild(ctr);
   row.appendChild(del);
   rows.appendChild(row);
@@ -1733,15 +1798,17 @@ function onRowsChanged() {
   rows.forEach(function (r) { r.querySelector('.row-del').hidden = rows.length === 1; });
 }
 
-// Re-colour the plotted curves (canvas, legend, table) from the current row
-// pickers. Keeps the current view/zoom — geometry hasn't changed.
+// Re-style the plotted curves (colour + opacity on canvas, legend, table)
+// from the current row pickers. Keeps the current view/zoom — geometry
+// hasn't changed.
 function applyPickerColours() {
   const formulas = collectFormulas();
   const colors = collectColors();
   if (!formulas.length) return;
   if (formulas.length !== colors.length) return;
   if (colorsMatchRows()) {
-    lastCurves.forEach(function (c, i) { c.color = colors[i]; });
+    const ops = collectSpecs().map(function (s) { return s.op; });
+    lastCurves.forEach(function (c, i) { c.color = colors[i]; c.opacity = ops[i]; });
     redraw();
     renderLegend(lastCurves);
     renderTable(lastCurves, colors);
@@ -1769,7 +1836,7 @@ function renderTable(curves, colors) {
   curves.forEach(function (c, ci) {
     const color = (colors && colors[ci]) || '#2563eb';
     html += '<tr class="branch-hdr"><td colspan="2">' +
-      '<span class="dot-inline" style="background:' + color + '"></span>' +
+      '<span class="dot-inline" style="background:' + colorWithAlpha(color, opToAlpha(c.opacity)) + '"></span>' +
       c.display + centreLabel(c) + '</td></tr>';
     c.branches.forEach(function (br) {
       if (c.branches.length > 1) {
@@ -1792,7 +1859,7 @@ function renderLegend(curves) {
     item.className = 'legend-item';
     const dot = document.createElement('span');
     dot.className = 'color-dot';
-    dot.style.background = c.color;
+    dot.style.background = colorWithAlpha(c.color, opToAlpha(c.opacity));
     const label = document.createElement('span');
     label.textContent = c.display + (c.inequality ? '  ' + c.inequality.op : '') + centreLabel(c);
     item.appendChild(dot);
@@ -1883,6 +1950,10 @@ function rangeParams(formulas) {
   const specs = collectSpecs();
   const anyColor = specs.some(function (s, i) { return s.color !== paletteAt(i); });
   if (anyColor) specs.forEach(function (s) { p.append('color', s.color); });
+  // Opacity params — same rule as colours: only when SOME row differs from
+  // the default (100); the FULL list is then sent so rows stay aligned.
+  const anyOpacity = specs.some(function (s) { return s.op !== DEFAULT_OPACITY; });
+  if (anyOpacity) specs.forEach(function (s) { p.append('op', s.op); });
   const anyCenter = specs.some(function (s) { return s.cx !== 0 || s.cy !== 0; });
   if (anyCenter) specs.forEach(function (s) { p.append('cx', s.cx); p.append('cy', s.cy); });
   return p;
@@ -1962,6 +2033,7 @@ async function plot() {
   // centre (cx, cy) — that formula's own (0,0) sits at (cx, cy) on the
   // shared plane. Polar θ/r table columns keep the formula's own frame.
   const centers = collectCenters();
+  const ops = collectSpecs().map(function (s) { return s.op; });
   const curves = data.curves.map(function (c, i) {
     const cx = (centers[i] && centers[i].x) || 0;
     const cy = (centers[i] && centers[i].y) || 0;
@@ -1978,6 +2050,7 @@ async function plot() {
     }) : c.branches;
     return {
       color: colors[i] || paletteAt(i),
+      opacity: ops[i] === undefined ? DEFAULT_OPACITY : ops[i],
       display: c.display,
       branches: branches,
       inequality: c.inequality,
@@ -2098,19 +2171,24 @@ function init() {
       activeFormulaInput = e.target;
     }
   });
-  // A row colour change recolours that formula's curve live (canvas, legend,
-  // table) and keeps the shareable URL in sync.
+  // A row colour or opacity change restyles that formula's curve live
+  // (canvas, legend, table) and keeps the shareable URL in sync — no replot.
   document.getElementById('formulaRows').addEventListener('input', function (e) {
-    if (e.target && e.target.classList && e.target.classList.contains('color-pick')) {
+    if (e.target && e.target.classList &&
+        (e.target.classList.contains('color-pick') || e.target.classList.contains('opacity-pick'))) {
       applyPickerColours();
     }
   });
   // A centre change moves the curve — replot on commit (Enter or blur), not
-  // per keystroke while typing the offset.
+  // per keystroke while typing the offset. An opacity commit just normalises
+  // the field (blank/out-of-range -> the effective clamped value).
   document.getElementById('formulaRows').addEventListener('change', function (e) {
     if (e.target && e.target.classList &&
         (e.target.classList.contains('ctr-x') || e.target.classList.contains('ctr-y'))) {
       plot();
+    }
+    if (e.target && e.target.classList && e.target.classList.contains('opacity-pick')) {
+      e.target.value = String(opNum(e.target.value));
     }
   });
   document.getElementById('pngBtn').addEventListener('click', exportPng);

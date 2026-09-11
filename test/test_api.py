@@ -244,6 +244,40 @@ def test_template_palette_matches_js_palette():
     assert js_hexes == CURVE_PALETTE
 
 
+def test_index_renders_hex_colour_box_and_palette_button_per_formula():
+    # Each row's colour cell holds the device swatch, a hex/text box (any CSS
+    # colour — Android's device dialog only offers a small fixed set) and a
+    # button opening the built-in palette.
+    r = client.get("/", params=[("formula", "y = x"), ("formula", "y = 2x")])
+    assert r.status_code == 200
+    assert r.text.count('class="color-cell"') == 2
+    assert r.text.count('class="hex-pick"') == 2
+    assert r.text.count('class="pal-btn"') == 2
+
+
+def test_index_hex_box_mirrors_the_initial_colour():
+    # The hex box shows the row's prefilled colour, so a share URL's color=
+    # param is editable text as well as a swatch.
+    r = client.get("/", params=[("formula", "y = x"), ("color", "#ff00aa")])
+    assert r.status_code == 200
+    assert r.text.count('value="#ff00aa"') == 2   # device swatch + hex box
+
+
+def test_index_renders_palette_popover_with_presets():
+    import re
+
+    r = client.get("/")
+    assert r.status_code == 200
+    assert 'id="palPop"' in r.text and 'id="palGrid"' in r.text
+    # The swatches are built in the template JS from PALETTE_PRESETS: assert
+    # they are all valid distinct hexes (the popover has nothing else to show).
+    m = re.search(r"PALETTE_PRESETS = \[([^\]]+)\]", r.text)
+    assert m, "PALETTE_PRESETS not found in template"
+    hexes = re.findall(r"'#[0-9a-f]{6}'", m.group(1))
+    assert len(hexes) == 32
+    assert len(set(hexes)) == 32
+
+
 def test_index_renders_grid_and_axis_toggles():
     # Two independent view toggles next to the plot button: Grid (lines only)
     # and Axis (axis lines, arrows, tick numbers and the x/y labels).

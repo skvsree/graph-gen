@@ -73,11 +73,42 @@
   .formula-row .color-pick::-webkit-color-swatch-wrapper { padding: 2px; }
   .formula-row .color-pick::-webkit-color-swatch { border: none; border-radius: 4px; }
   .formula-row .color-pick::-moz-color-swatch { border: none; border-radius: 4px; }
-  .row-del {
+  /* Colour cell: device swatch + a hex/text box (any CSS colour — the Android
+     device dialog only offers a small fixed palette) + a palette popover. */
+  .color-cell { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+  .form input.hex-pick {
+    width: 100px; padding: 8px 6px; font-size: 13px; text-align: center;
+    text-transform: lowercase;
+  }
+  .form input.hex-pick.bad { border-color: var(--error-fg); background: var(--error-bg); }
+  /* Scoped to .form so it outranks `.form button` (otherwise the generic blue
+     button background wins and the quiet swatch-arrow/remove styles never apply). */
+  .form .pal-btn {
+    border: 1px solid var(--border); background: var(--card); color: var(--fg-soft);
+    border-radius: 6px; padding: 9px 5px; font-size: 11px; line-height: 1;
+    cursor: pointer; font-family: inherit;
+  }
+  .form .pal-btn:hover { background: var(--hover); }
+  /* Palette popover: one shared element, positioned next to the button that
+     opened it (fixed, so a wrapped row can't clip it). */
+  .pal-pop {
+    position: fixed; z-index: 40; background: var(--card);
+    border: 1px solid var(--border); border-radius: 10px; padding: 8px;
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.28);
+  }
+  .pal-pop[hidden] { display: none; }
+  .pal-grid { display: grid; grid-template-columns: repeat(8, 28px); gap: 6px; }
+  .pal-sw {
+    width: 28px; height: 28px; padding: 0; border-radius: 6px;
+    border: 1px solid var(--border); cursor: pointer;
+  }
+  .pal-sw:hover { outline: 2px solid var(--input-focus); }
+  .pal-sw.on { border: 2px solid var(--fg); }
+  .form .row-del {
     border: none; background: none; cursor: pointer; font-size: 18px; line-height: 1;
     color: var(--muted); padding: 4px 6px; border-radius: 6px;
   }
-  .row-del:hover { color: var(--error-fg); background: var(--hover); }
+  .form .row-del:hover { color: var(--error-fg); background: var(--hover); }
   .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
   .tab {
     padding: 8px 18px; font-size: 14px; font-weight: 600; font-family: inherit;
@@ -163,7 +194,11 @@
       {% for f in formulas %}
       <div class="formula-row">
         <input type="text" class="formula-input" value="{{ f }}" spellcheck="false" autocomplete="off" placeholder="e.g. y = {{ 'sin(x)' if loop.first else 'cos(x)' }}"{% if loop.first %} id="formula"{% endif %}>
-        <input type="color" class="color-pick" value="{{ colors[loop.index0] }}" title="Pick this formula's line colour">
+        <span class="color-cell">
+          <input type="color" class="color-pick" value="{{ colors[loop.index0] }}" title="Device colour picker — on Android this is a small fixed palette, so use the box beside it for any colour">
+          <input type="text" class="hex-pick" value="{{ colors[loop.index0] }}" spellcheck="false" autocomplete="off" maxlength="24" title="Any opaque CSS colour — #rgb, #rrggbb, rgb(…), hsl(…) or a name like tomato; press Enter to apply (use the % field for transparency)" aria-label="Line colour as an opaque CSS colour value">
+          <button type="button" class="pal-btn" title="Pick from the colour palette" aria-label="Open the colour palette">&#9662;</button>
+        </span>
         <span class="ctr op-ctr" title="This formula's line opacity in percent of its colour (0–100, default 100 = fully opaque)">
           <span class="ctr-axis">
             <label class="ctr-lbl" for="op{{ loop.index0 }}">%</label>
@@ -206,6 +241,10 @@
     <button type="button" class="btn-secondary" id="gridBtn" title="Toggle grid lines">Grid: on</button>
     <button type="button" class="btn-secondary" id="axisBtn" title="Toggle the x/y axes — the axis lines, their arrows, the tick numbers and the x/y labels (the grid is a separate toggle)">Axis: on</button>
   </form>
+
+  <div class="pal-pop" id="palPop" hidden>
+    <div class="pal-grid" id="palGrid" role="listbox" aria-label="Colour palette"></div>
+  </div>
 
   <details class="accordion" id="samplesAccordion">
     <summary>Samples</summary>
@@ -1589,6 +1628,102 @@ const CURVE_PALETTE = ['#dc2626', '#16a34a', '#2563eb', '#0891b2', '#0d9488'];
 // The palette colour for URL position i (positions roll over past 5 rows).
 function paletteAt(i) { return CURVE_PALETTE[i % CURVE_PALETTE.length]; }
 
+// The built-in palette behind each row's ▾ button: 32 colours covering vivid,
+// pastel and neutral tones, so a colour is one tap away on a device whose
+// native colour dialog only offers a small fixed set (Android's does).
+const PALETTE_PRESETS = [
+  '#dc2626', '#ea580c', '#f59e0b', '#eab308', '#84cc16', '#16a34a', '#10b981', '#0d9488',
+  '#0891b2', '#0ea5e9', '#2563eb', '#4f46e5', '#7c3aed', '#9333ea', '#c026d3', '#db2777',
+  '#e11d48', '#fb7185', '#fda4af', '#fcd34d', '#86efac', '#7dd3fc', '#c4b5fd', '#f0abfc',
+  '#000000', '#334155', '#64748b', '#94a3b8', '#cbd5e1', '#f1f5f9', '#ffffff', '#78350f',
+];
+
+// Any CSS colour string -> '#rrggbb', or null when the browser won't accept
+// it. Resolved through the browser's own colour parser, so the hex box takes
+// #rgb / #rrggbb / rgb() / hsl() / named colours ("tomato"), not just hex
+// digits. Anything carrying its OWN alpha (#rrggbbaa, #rgba, rgba(...) with
+// a < 1) is rejected rather than silently flattened -- transparency belongs to
+// the row's % field, so it is never quietly dropped.
+function cssColorToHex(value) {
+  const v = String(value == null ? '' : value).trim();
+  if (!v) return null;
+  const probe = document.createElement('span');
+  probe.style.color = '';
+  probe.style.color = v;
+  if (!probe.style.color) return null;          // the browser rejected the value
+  document.body.appendChild(probe);             // getComputedStyle needs it live
+  const computed = getComputedStyle(probe).color;
+  probe.remove();
+  const m = /^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)$/.exec(computed);
+  if (!m) return null;
+  if (m[4] !== undefined && Math.abs(parseFloat(m[4]) - 1) > 1e-3) return null;  // has alpha
+
+  return '#' + [1, 2, 3].map(function (i) {
+    return (+m[i]).toString(16).padStart(2, '0');
+  }).join('');
+}
+
+// Give one row a colour: device swatch + hex box stay in step and the curve
+// recolours live (no server round-trip) — exactly what a device-picker change
+// does. Shared by the hex box and the palette popover.
+function setRowColor(row, hex) {
+  const pick = row.querySelector('.color-pick');
+  const box = row.querySelector('.hex-pick');
+  if (pick) pick.value = hex;
+  if (box) { box.value = hex; box.classList.remove('bad'); }
+  applyPickerColours();
+}
+
+// --- palette popover: ONE element shared by every row's ▾ button ----------
+let palRow = null;   // the row whose ▾ button opened the popover
+
+function buildPalette() {
+  const grid = document.getElementById('palGrid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  PALETTE_PRESETS.forEach(function (hex) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'pal-sw';
+    b.style.background = hex;
+    b.dataset.hex = hex;
+    b.title = hex;
+    b.setAttribute('role', 'option');
+    b.setAttribute('aria-label', hex);
+    b.addEventListener('click', function () {
+      if (palRow) setRowColor(palRow, hex);
+      closePalette();
+    });
+    grid.appendChild(b);
+  });
+}
+
+function openPalette(btn) {
+  const pop = document.getElementById('palPop');
+  palRow = btn.closest('.formula-row');
+  pop.hidden = false;
+  // Keep the panel inside the viewport: below the button, flipped above when
+  // there is no room, and clamped horizontally on narrow screens.
+  const r = btn.getBoundingClientRect();
+  const w = pop.offsetWidth, h = pop.offsetHeight;
+  let left = Math.max(8, Math.min(r.left - 4, window.innerWidth - w - 8));
+  let top = r.bottom + 6;
+  if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6);
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
+  const box = palRow ? palRow.querySelector('.hex-pick') : null;
+  const cur = box ? cssColorToHex(box.value) : null;
+  pop.querySelectorAll('.pal-sw').forEach(function (s) {
+    s.classList.toggle('on', s.dataset.hex === cur);
+  });
+}
+
+function closePalette() {
+  const pop = document.getElementById('palPop');
+  if (pop) pop.hidden = true;
+  palRow = null;
+}
+
 // Per-row line opacity, in percent of the row's colour (0..100). 100 = fully
 // opaque. Mirrored server-side as DEFAULT_OPACITY in app/main.py.
 const DEFAULT_OPACITY = 100;
@@ -1729,10 +1864,14 @@ function collectSpecs() {
     const cy = ctrNum(row.querySelector('.ctr-y').value);
     const rotEl = row.querySelector('.rot-pick');
     const rot = rotEl ? rotNum(rotEl.value) : DEFAULT_ROTATION;
+    // Colour comes from the device swatch, which is the single source of
+    // truth: the hex box is just another way to write to it (on commit), so a
+    // half-typed box value can never leak into the URL or the canvas.
+    const color = row.querySelector('.color-pick').value;
     const key = f + '|' + cx + '|' + cy + '|' + rot;
     if (seen[key]) return;
     seen[key] = true;
-    specs.push({ formula: f, cx: cx, cy: cy, rot: rot, color: row.querySelector('.color-pick').value, op: opNum(row.querySelector('.opacity-pick').value), key: key });
+    specs.push({ formula: f, cx: cx, cy: cy, rot: rot, color: color, op: opNum(row.querySelector('.opacity-pick').value), key: key });
   });
   return specs;
 }
@@ -1764,11 +1903,34 @@ function addFormulaRow(value) {
   input.autocomplete = 'off';
   input.placeholder = mode === 'polar' ? 'e.g. r = 2\u03b8' : 'e.g. y = cos(x)';
   if (value) input.value = value;
+  // Colour cell: device swatch + hex box + palette button. Mirrors the
+  // server-rendered `.color-cell` in every template row.
+  const newColor = nextFreeColor();
+  const cell = document.createElement('span');
+  cell.className = 'color-cell';
   const pick = document.createElement('input');
   pick.type = 'color';
   pick.className = 'color-pick';
-  pick.title = "Pick this formula's line colour";
-  pick.value = nextFreeColor();
+  pick.title = 'Device colour picker — on Android this is a small fixed palette, so use the box beside it for any colour';
+  pick.value = newColor;
+  const box = document.createElement('input');
+  box.type = 'text';
+  box.className = 'hex-pick';
+  box.value = newColor;
+  box.spellcheck = false;
+  box.autocomplete = 'off';
+  box.maxLength = 24;
+  box.title = 'Any opaque CSS colour — #rgb, #rrggbb, rgb(…), hsl(…) or a name like tomato; press Enter to apply (use the % field for transparency)';
+  box.setAttribute('aria-label', 'Line colour as an opaque CSS colour value');
+  const palBtn = document.createElement('button');
+  palBtn.type = 'button';
+  palBtn.className = 'pal-btn';
+  palBtn.title = 'Pick from the colour palette';
+  palBtn.setAttribute('aria-label', 'Open the colour palette');
+  palBtn.textContent = '\u25be';
+  cell.appendChild(pick);
+  cell.appendChild(box);
+  cell.appendChild(palBtn);
   // Line opacity in percent (0–100, default 100 = fully opaque). Mirrors
   // the server-rendered `.opacity-pick` in each template row.
   const opWrap = document.createElement('span');
@@ -1841,7 +2003,7 @@ function addFormulaRow(value) {
   del.textContent = '\u00d7';
   del.addEventListener('click', function () { row.remove(); onRowsChanged(); });
   row.appendChild(input);
-  row.appendChild(pick);
+  row.appendChild(cell);
   row.appendChild(opWrap);
   row.appendChild(ctr);
   row.appendChild(rot);
@@ -2259,9 +2421,20 @@ function init() {
   });
   // A row colour or opacity change restyles that formula's curve live
   // (canvas, legend, table) and keeps the shareable URL in sync — no replot.
+  // The hex box is handled on COMMIT (see the change handler): '#ff8' and
+  // 'rgba(255,0,0' are accepted by the browser's colour parser on the way to
+  // '#ff8800' / 'rgba(255,0,0,0.5)', so applying every keystroke would flash
+  // colours the user never chose. Mid-typing just clears any error flag.
   document.getElementById('formulaRows').addEventListener('input', function (e) {
-    if (e.target && e.target.classList &&
-        (e.target.classList.contains('color-pick') || e.target.classList.contains('opacity-pick'))) {
+    const t = e.target;
+    if (!t || !t.classList) return;
+    if (t.classList.contains('color-pick')) {
+      const box = t.closest('.formula-row').querySelector('.hex-pick');
+      if (box) { box.value = t.value.toLowerCase(); box.classList.remove('bad'); }
+      applyPickerColours();
+    } else if (t.classList.contains('hex-pick')) {
+      t.classList.remove('bad');           // mid-typing is never "wrong"
+    } else if (t.classList.contains('opacity-pick')) {
       applyPickerColours();
     }
   });
@@ -2277,7 +2450,42 @@ function init() {
     if (e.target && e.target.classList && e.target.classList.contains('opacity-pick')) {
       e.target.value = String(opNum(e.target.value));
     }
+    // Enter/blur on the hex box: a usable colour is written to the device
+    // swatch (so the model, the URL and the canvas follow) and normalised to
+    // #rrggbb — shorthand "#f80" and names like "tomato" included. A value the browser
+    // cannot use as an opaque colour (#gg0000, "#ff88" -- which carries alpha
+    // -- or a half-typed one) is KEPT and flagged, so nothing is silently
+    // overwritten, and the curve stays on the row's last good colour.
+    if (e.target && e.target.classList && e.target.classList.contains('hex-pick')) {
+      const pick = e.target.closest('.formula-row').querySelector('.color-pick');
+      const hex = cssColorToHex(e.target.value);
+      if (hex) {
+        if (pick) pick.value = hex;
+        e.target.value = hex;
+        e.target.classList.remove('bad');
+        applyPickerColours();
+      } else {
+        e.target.classList.add('bad');
+      }
+    }
   });
+  // Palette popover (one shared panel): ▾ opens it for its own row; a swatch
+  // applies that colour; click-outside / Escape / resize / scroll dismiss it.
+  buildPalette();
+  document.getElementById('formulaRows').addEventListener('click', function (e) {
+    const btn = e.target && e.target.closest ? e.target.closest('.pal-btn') : null;
+    if (btn) openPalette(btn);
+  });
+  document.addEventListener('click', function (e) {
+    const pop = document.getElementById('palPop');
+    if (!pop || pop.hidden) return;
+    if (pop.contains(e.target)) return;
+    if (e.target.closest && e.target.closest('.pal-btn')) return;
+    closePalette();
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closePalette(); });
+  window.addEventListener('resize', closePalette);
+  window.addEventListener('scroll', closePalette, true);
   document.getElementById('pngBtn').addEventListener('click', exportPng);
   document.getElementById('copyBtn').addEventListener('click', copyLink);
   document.getElementById('themeBtn').addEventListener('click', toggleTheme);

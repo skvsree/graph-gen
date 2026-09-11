@@ -24,8 +24,12 @@ only. Every successful plot is remembered in a localStorage history row (last
 12, click a chip to re-plot, ✕ clear).
 
 **Plot up to 5 formulas at once** ("+ Add formula" adds an input row). Each
-row owns its curve's **colour** (native picker), **line opacity** (a percent
-field, 0–100, default 100) and two presentation transforms: its own **centre**
+row owns its curve's **colour** — the device picker, a **hex box** taking any
+opaque CSS colour (`#f80`, `#ff8800`, `rgb(… )`, `hsl(…)`, `tomato`; Enter or
+blur applies it), and a **▾ palette** of 32 built-in swatches, because a
+platform's colour dialog (Android's especially) only offers a small fixed set —
+plus **line opacity** (a percent field, 0–100, default 100) and two
+presentation transforms: its own **centre**
 (x/y, default 0,0 — the point on the graph where that curve's own (0,0) sits)
 and its own **rotation** (∠, degrees about that centre, default 0, positive =
 anticlockwise). Centre + rotation turn one shape into many — place a polar

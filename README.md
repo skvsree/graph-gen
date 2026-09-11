@@ -16,9 +16,12 @@ vertical asymptotes are skipped (the polyline breaks across an asymptote),
 so `tan` and reciprocal functions render cleanly.
 
 The graph is interactive: **drag to pan, scroll or pinch to zoom, double-click
-to reset**. A theme toggle (dark/light, persisted) and a grid on/off toggle sit
-next to the plot button, and every successful plot is remembered in a
-localStorage history row (last 12, click a chip to re-plot, ✕ clear).
+to reset**. A theme toggle (dark/light, persisted) and two independent view
+toggles sit next to the plot button — **Grid** (grid lines) and **Axis** (the
+axis lines, their arrowheads, the tick numbers and the `x`/`y` labels), so
+`Grid: on` + `Axis: off` gives an unlabelled grid and both off gives curves
+only. Every successful plot is remembered in a localStorage history row (last
+12, click a chip to re-plot, ✕ clear).
 
 **Plot up to 5 formulas at once** ("+ Add formula" adds an input row). Each
 row owns its curve's **colour** (native picker), **line opacity** (a percent

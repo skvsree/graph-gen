@@ -244,6 +244,15 @@ def test_template_palette_matches_js_palette():
     assert js_hexes == CURVE_PALETTE
 
 
+def test_index_renders_grid_and_axis_toggles():
+    # Two independent view toggles next to the plot button: Grid (lines only)
+    # and Axis (axis lines, arrows, tick numbers and the x/y labels).
+    r = client.get("/")
+    assert r.status_code == 200
+    assert 'id="gridBtn"' in r.text and "Grid: on" in r.text
+    assert 'id="axisBtn"' in r.text and "Axis: on" in r.text
+
+
 def test_api_points_polar():
     r = client.get("/api/points", params={"formula": "r = 2θ", "mode": "polar"})
     assert r.status_code == 200

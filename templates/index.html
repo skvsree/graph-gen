@@ -204,6 +204,7 @@
     <button type="button" class="btn-secondary" id="copyBtn" title="Copy a shareable link to this graph">Copy link</button>
     <button type="button" class="btn-secondary" id="themeBtn" title="Toggle dark / light theme">🌙 Dark</button>
     <button type="button" class="btn-secondary" id="gridBtn" title="Toggle grid lines">Grid: on</button>
+    <button type="button" class="btn-secondary" id="axisBtn" title="Toggle the x/y axes — the axis lines, their arrows, the tick numbers and the x/y labels (the grid is a separate toggle)">Axis: on</button>
   </form>
 
   <details class="accordion" id="samplesAccordion">
@@ -1296,6 +1297,7 @@ const PALETTES = {
 let view = null;        // {cx, cy, unit} — pixel pos of data origin, px per unit
 let lastCurves = null;
 let gridOn = true;
+let axesOn = true;      // axes, arrows, tick numbers and the x/y labels
 
 function currentTheme() {
   return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
@@ -1350,27 +1352,32 @@ function draw(curves) {
     }
   }
 
-  // Axes through the data origin (skipped when panned off-canvas)
-  if (cx >= -8 && cx <= W + 8) {
-    ctx.strokeStyle = pal.axis; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(W - 8, cy); ctx.stroke();
-    ctx.fillStyle = pal.axis;
-    ctx.beginPath(); ctx.moveTo(W - 14, cy - 5); ctx.lineTo(W - 8, cy); ctx.lineTo(W - 14, cy + 5); ctx.closePath(); ctx.fill();
-  }
-  if (cy >= -8 && cy <= H + 8) {
-    ctx.strokeStyle = pal.axis; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(cx, H); ctx.lineTo(cx, 8); ctx.stroke();
-    ctx.fillStyle = pal.axis;
-    ctx.beginPath(); ctx.moveTo(cx - 5, 14); ctx.lineTo(cx, 8); ctx.lineTo(cx + 5, 14); ctx.closePath(); ctx.fill();
-  }
+  // Axes through the data origin (skipped when panned off-canvas). Toggled as
+  // a group by the Axis button: the lines, their arrowheads, the tick numbers
+  // and the x/y labels all belong to the axes — with them off, the grid (its
+  // own toggle) stays as plain lines with no numbers, the Desmos behaviour.
+  if (axesOn) {
+    if (cx >= -8 && cx <= W + 8) {
+      ctx.strokeStyle = pal.axis; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(W - 8, cy); ctx.stroke();
+      ctx.fillStyle = pal.axis;
+      ctx.beginPath(); ctx.moveTo(W - 14, cy - 5); ctx.lineTo(W - 8, cy); ctx.lineTo(W - 14, cy + 5); ctx.closePath(); ctx.fill();
+    }
+    if (cy >= -8 && cy <= H + 8) {
+      ctx.strokeStyle = pal.axis; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(cx, H); ctx.lineTo(cx, 8); ctx.stroke();
+      ctx.fillStyle = pal.axis;
+      ctx.beginPath(); ctx.moveTo(cx - 5, 14); ctx.lineTo(cx, 8); ctx.lineTo(cx + 5, 14); ctx.closePath(); ctx.fill();
+    }
 
-  // Tick labels
-  ctx.fillStyle = pal.ticks;
-  for (let g = -visX; g <= visX; g += stepX) { if (g === 0) continue; ctx.fillText(fmt(g), X(g) + 3, cy + 16); }
-  for (let g = -visY; g <= visY; g += stepY) { if (g === 0) continue; ctx.fillText(fmt(g), cx + 6, Y(g) - 4); }
-  ctx.fillStyle = pal.labels;
-  ctx.fillText('x', W - 20, cy - 10);
-  ctx.fillText('y', cx + 12, 18);
+    // Tick labels
+    ctx.fillStyle = pal.ticks;
+    for (let g = -visX; g <= visX; g += stepX) { if (g === 0) continue; ctx.fillText(fmt(g), X(g) + 3, cy + 16); }
+    for (let g = -visY; g <= visY; g += stepY) { if (g === 0) continue; ctx.fillText(fmt(g), cx + 6, Y(g) - 4); }
+    ctx.fillStyle = pal.labels;
+    ctx.fillText('x', W - 20, cy - 10);
+    ctx.fillText('y', cx + 12, 18);
+  }
 
   // Line through each curve's branches (each curve has its own colour). The
   // polyline breaks when two consecutive samples jump across a vertical
@@ -2228,6 +2235,13 @@ function toggleGrid() {
   document.getElementById('gridBtn').textContent = gridOn ? 'Grid: on' : 'Grid: off';
   redraw();
 }
+// Hide/show the axis furniture (lines, arrows, tick numbers, x/y labels).
+// Redraws only — the data, the view (pan/zoom) and the grid state are kept.
+function toggleAxes() {
+  axesOn = !axesOn;
+  document.getElementById('axisBtn').textContent = axesOn ? 'Axis: on' : 'Axis: off';
+  redraw();
+}
 
 function init() {
   const form = document.getElementById('form');
@@ -2268,6 +2282,7 @@ function init() {
   document.getElementById('copyBtn').addEventListener('click', copyLink);
   document.getElementById('themeBtn').addEventListener('click', toggleTheme);
   document.getElementById('gridBtn').addEventListener('click', toggleGrid);
+  document.getElementById('axisBtn').addEventListener('click', toggleAxes);
   ['history', 'samples'].forEach(function (kind) {
     const el = document.getElementById(kind + 'Accordion');
     el.addEventListener('toggle', function () {

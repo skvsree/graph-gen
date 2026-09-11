@@ -14,12 +14,14 @@
     --card: #ffffff; --border: #cbd5e1; --row-border: #f1f5f9;
     --hover: #f1f5f9; --chip-hover: #eef2ff; --input-focus: #bfdbfe;
     --error-fg: #b91c1c; --error-bg: #fef2f2; --error-border: #fecaca;
+    --accent: #2563eb;   /* icon-toggle ON state */
   }
   html[data-theme="dark"] {
     --bg: #0f172a; --fg: #e2e8f0; --fg-soft: #cbd5e1; --muted: #94a3b8;
     --card: #1e293b; --border: #334155; --row-border: #1e293b;
     --hover: #243349; --chip-hover: #334155; --input-focus: #1e3a5f;
     --error-fg: #fca5a5; --error-bg: #450a0a; --error-border: #7f1d1d;
+    --accent: #93c5fd;
   }
   * { box-sizing: border-box; }
   body {
@@ -104,11 +106,13 @@
   }
   .pal-sw:hover { outline: 2px solid var(--input-focus); }
   .pal-sw.on { border: 2px solid var(--fg); }
-  .form .row-del {
-    border: none; background: none; cursor: pointer; font-size: 18px; line-height: 1;
-    color: var(--muted); padding: 4px 6px; border-radius: 6px;
+  /* Per-row icon buttons (duplicate / remove) — quiet until hovered. */
+  .form .row-del, .form .row-dup {
+    border: none; background: none; cursor: pointer; line-height: 1;
+    color: var(--muted); padding: 4px 6px; border-radius: 6px; flex: none;
   }
   .form .row-del:hover { color: var(--error-fg); background: var(--hover); }
+  .form .row-dup:hover { color: var(--fg); background: var(--hover); }
   .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
   .tab {
     padding: 8px 18px; font-size: 14px; font-weight: 600; font-family: inherit;
@@ -121,11 +125,33 @@
   .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 0 0 12px; align-items: center; }
   .legend-item { display: inline-flex; gap: 7px; align-items: center; font-size: 13.5px; color: var(--fg-soft); }
   .dot-inline { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: baseline; }
-  .btn-secondary {
+  /* Scoped to .form so it outranks the generic `.form button` rule (0,1,1) —
+     without this every secondary button took the blue primary background. */
+  .form .btn-secondary {
     padding: 10px 14px; font-size: 14px; font-weight: 600; font-family: inherit;
     background: var(--card); color: var(--fg-soft); border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
   }
-  .btn-secondary:hover { background: var(--hover); border-color: #94a3b8; }
+  .form .btn-secondary:hover { background: var(--hover); border-color: #94a3b8; }
+  /* Inline icons. `.s` = stroked path, `.f` = filled path (the play glyph) —
+     every icon inherits currentColor so it follows the button state. */
+  .ico { display: block; width: 18px; height: 18px; }
+  .ico.sm { width: 15px; height: 15px; }
+  .ico .s { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .ico .f { fill: currentColor; stroke: none; }
+  /* Icon-only toolbar buttons: the tooltip + aria-label carry the name, the
+     `.on` class + aria-pressed carry a toggle's state. */
+  .form .tool-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 42px; height: 38px; padding: 0; flex: none;
+  }
+  .form .tool-btn.tool-primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .form .tool-btn.tool-primary:hover { background: #1d4ed8; }
+  .form .tool-btn.tool-toggle { color: var(--muted); }
+  .form .tool-btn.tool-toggle:hover { color: var(--fg-soft); }
+  .form .tool-btn.tool-toggle.on {
+    color: var(--accent); background: var(--chip-hover); border-color: var(--accent);
+  }
+  .tool-sep { width: 1px; height: 22px; background: var(--border); flex: none; margin: 0 1px; }
   .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
   .chip {
     font-family: ui-monospace, Consolas, monospace; font-size: 13px;
@@ -221,7 +247,12 @@
             <input type="number" class="rot-pick" id="rot{{ loop.index0 }}" value="{{ rotations[loop.index0] }}" placeholder="0" min="-1000000" max="1000000" step="any">
           </span>
         </span>
-        <button type="button" class="row-del" title="Remove this formula"{% if formulas|length == 1 %} hidden{% endif %}>&times;</button>
+        <button type="button" class="row-dup" title="Duplicate this formula as a new row below — same colour, opacity, centre and rotation" aria-label="Duplicate this formula">
+          <svg class="ico sm" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="s" d="M11.9 4.2H4.6A1.4 1.4 0 0 0 3.2 5.6v7.3"/><rect class="s" x="6.1" y="6.1" width="8.7" height="8.7" rx="1.7"/></svg>
+        </button>
+        <button type="button" class="row-del" title="Remove this formula" aria-label="Remove this formula"{% if formulas|length == 1 %} hidden{% endif %}>
+          <svg class="ico sm" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="s" d="M4.8 4.8 13.2 13.2M13.2 4.8 4.8 13.2"/></svg>
+        </button>
       </div>
       {% endfor %}
     </div>
@@ -233,14 +264,28 @@
       <span class="range-label">step</span>
       <input type="number" id="xStep" value="{{ x_step }}" placeholder="auto" min="0.0001" max="1000" step="any" title="x step (blank = auto; fractions like 0.1 allowed)">
     </div>
-    <button type="submit">Plot</button>
-    <button type="button" class="btn-secondary" id="addFormulaBtn" title="Add another formula (max 5)">+ Add formula</button>
-    <button type="button" class="btn-secondary" id="dupSetBtn" title="Copy every formula row — formula, colour, opacity, centre and rotation — into new rows, so a whole set can be re-placed or rotated. Copies are identical, so they draw as one curve until you edit them.">Duplicate set</button>
-    <button type="button" class="btn-secondary" id="pngBtn" title="Download the graph as PNG">Download PNG</button>
-    <button type="button" class="btn-secondary" id="copyBtn" title="Copy a shareable link to this graph">Copy link</button>
-    <button type="button" class="btn-secondary" id="themeBtn" title="Toggle dark / light theme">🌙 Dark</button>
-    <button type="button" class="btn-secondary" id="gridBtn" title="Toggle grid lines">Grid: on</button>
-    <button type="button" class="btn-secondary" id="axisBtn" title="Toggle the x/y axes — the axis lines, their arrows, the tick numbers and the x/y labels (the grid is a separate toggle)">Axis: on</button>
+    <button type="submit" class="tool-btn tool-primary" id="plotBtn" title="Plot the formulas" aria-label="Plot">
+      <svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="f" d="M5.2 3.1 14.5 9l-9.3 5.9Z"/></svg>
+    </button>
+    <button type="button" class="btn-secondary tool-btn" id="addFormulaBtn" title="Add another formula (max 5)" aria-label="Add formula">
+      <svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="s" d="M9 3.4v11.2M3.4 9h11.2"/></svg>
+    </button>
+    <button type="button" class="btn-secondary tool-btn" id="pngBtn" title="Download the graph as a PNG image" aria-label="Download PNG">
+      <svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="s" d="M9 2.9v8.4M5.7 8.1 9 11.4l3.3-3.3M3.3 14.7h11.4"/></svg>
+    </button>
+    <button type="button" class="btn-secondary tool-btn" id="copyBtn" title="Copy a shareable link to this graph" aria-label="Copy link">
+      <svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="s" d="M7.4 10.6a3 3 0 0 0 4.3 0l2.5-2.5a3 3 0 0 0-4.3-4.3l-1 1"/><path class="s" d="M10.6 7.4a3 3 0 0 0-4.3 0l-2.5 2.5a3 3 0 0 0 4.3 4.3l1-1"/></svg>
+    </button>
+    <span class="tool-sep" aria-hidden="true"></span>
+    <button type="button" class="btn-secondary tool-btn tool-toggle" id="themeBtn" title="Switch to the dark theme" aria-label="Switch to the dark theme">
+      <svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="s" d="M14.6 11.5A6 6 0 0 1 6.5 3.4a6 6 0 1 0 8.1 8.1Z"/></svg>
+    </button>
+    <button type="button" class="btn-secondary tool-btn tool-toggle on" id="gridBtn" title="Grid: on — click to hide the grid lines" aria-label="Grid" aria-pressed="true">
+      <svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="s" d="M3 6.5h12M3 11.5h12M6.5 3v12M11.5 3v12"/></svg>
+    </button>
+    <button type="button" class="btn-secondary tool-btn tool-toggle on" id="axisBtn" title="Axis: on — click to hide the axis lines, arrows, tick numbers and the x/y labels (the grid is a separate toggle)" aria-label="Axis" aria-pressed="true">
+      <svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="s" d="M2.4 9h13.2M12.6 6.2 15.6 9l-3 2.8M9 15.6V2.4M6.2 5.4 9 2.4l2.8 3"/></svg>
+    </button>
   </form>
 
   <div class="pal-pop" id="palPop" hidden>
@@ -1896,6 +1941,54 @@ function collectRotations() {
 // by test_template_max_rows_matches_api_limit.
 const MAX_ROWS = 5;
 
+// The per-row controls a duplicated row must carry. cloneNode(true) copies
+// ATTRIBUTES (the server-rendered values), NOT anything typed since, so each
+// field's live .value has to be copied explicitly.
+const ROW_FIELDS = ['.formula-input', '.color-pick', '.hex-pick', '.opacity-pick',
+                    '.ctr-x', '.ctr-y', '.rot-pick'];
+
+// Icons built in JS mirror the inline SVGs in the template (same .ico classes,
+// so they inherit the same stroke/currentColor rules).
+const ICON = {
+  copy: '<svg class="ico sm" viewBox="0 0 18 18" aria-hidden="true" focusable="false">' +
+        '<path class="s" d="M11.9 4.2H4.6A1.4 1.4 0 0 0 3.2 5.6v7.3"/>' +
+        '<rect class="s" x="6.1" y="6.1" width="8.7" height="8.7" rx="1.7"/></svg>',
+  remove: '<svg class="ico sm" viewBox="0 0 18 18" aria-hidden="true" focusable="false">' +
+          '<path class="s" d="M4.8 4.8 13.2 13.2M13.2 4.8 4.8 13.2"/></svg>',
+  moon: '<svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false">' +
+        '<path class="s" d="M14.6 11.5A6 6 0 0 1 6.5 3.4a6 6 0 1 0 8.1 8.1Z"/></svg>',
+  sun: '<svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false">' +
+       '<circle class="s" cx="9" cy="9" r="3.3"/>' +
+       '<path class="s" d="M9 1.7v1.9M9 14.4v1.9M1.7 9h1.9M14.4 9h1.9M3.9 3.9l1.3 1.3M12.8 12.8l1.3 1.3' +
+       'M14.1 3.9l-1.3 1.3M5.2 12.8l-1.3 1.3"/></svg>',
+};
+
+// Set a toggle button's on/off look (icon colour + aria-pressed + tooltip), so
+// an icon-only control still states its state.
+function setToggleState(btn, on, onTitle, offTitle) {
+  btn.classList.toggle('on', on);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  btn.title = on ? onTitle : offTitle;
+}
+
+// Duplicate ONE formula row as a new row directly below it (formula, colour,
+// opacity, centre and rotation). The copy is verbatim, so until it is edited it
+// collapses into the same curve (collectSpecs' formula|centre|rotation dedupe);
+// editing the copy is the point of the button. Refuses at the MAX_ROWS ceiling.
+function duplicateRow(row) {
+  const box = document.getElementById('formulaRows');
+  if (!row || box.querySelectorAll('.formula-row').length >= MAX_ROWS) return;
+  const copy = row.cloneNode(true);
+  ROW_FIELDS.forEach(function (sel) {
+    const from = row.querySelector(sel), to = copy.querySelector(sel);
+    if (from && to) to.value = from.value;
+  });
+  copy.querySelectorAll('input').forEach(function (inp) { inp.removeAttribute('id'); });
+  copy.querySelectorAll('label[for]').forEach(function (l) { l.removeAttribute('for'); });
+  row.insertAdjacentElement('afterend', copy);
+  onRowsChanged();
+}
+
 function addFormulaRow(value) {
   const rows = document.getElementById('formulaRows');
   if (rows.querySelectorAll('.formula-row').length >= MAX_ROWS) return;
@@ -2001,17 +2094,27 @@ function addFormulaRow(value) {
   rotAxis.appendChild(rotLbl);
   rotAxis.appendChild(rotIn);
   rot.appendChild(rotAxis);
+  // Per-row icon buttons, mirroring the template's inline SVGs. No listeners:
+  // the row buttons are handled by DELEGATION on #formulaRows, which also
+  // covers cloned rows (cloneNode does not carry listeners across).
+  const dup = document.createElement('button');
+  dup.type = 'button';
+  dup.className = 'row-dup';
+  dup.title = 'Duplicate this formula as a new row below — same colour, opacity, centre and rotation';
+  dup.setAttribute('aria-label', 'Duplicate this formula');
+  dup.innerHTML = ICON.copy;
   const del = document.createElement('button');
   del.type = 'button';
   del.className = 'row-del';
   del.title = 'Remove this formula';
-  del.textContent = '\u00d7';
-  del.addEventListener('click', function () { row.remove(); onRowsChanged(); });
+  del.setAttribute('aria-label', 'Remove this formula');
+  del.innerHTML = ICON.remove;
   row.appendChild(input);
   row.appendChild(cell);
   row.appendChild(opWrap);
   row.appendChild(ctr);
   row.appendChild(rot);
+  row.appendChild(dup);
   row.appendChild(del);
   rows.appendChild(row);
   input.focus();
@@ -2023,9 +2126,10 @@ function onRowsChanged() {
   const rows = document.querySelectorAll('#formulaRows .formula-row');
   const full = rows.length >= MAX_ROWS;
   document.getElementById('addFormulaBtn').style.display = full ? 'none' : '';
-  // Duplicating needs room for at least one copy.
-  document.getElementById('dupSetBtn').style.display = (full || !rows.length) ? 'none' : '';
-  rows.forEach(function (r) { r.querySelector('.row-del').hidden = rows.length === 1; });
+  rows.forEach(function (r) {
+    r.querySelector('.row-del').hidden = rows.length === 1;
+    r.querySelector('.row-dup').hidden = full;   // one more row must fit
+  });
 }
 
 // Keep the per-row label/input ids unique and in order. Cloned rows and
@@ -2049,40 +2153,6 @@ function reindexRows() {
       if (i === 0) fin.id = 'formula';   // activeFormulaField() fallback
     }
   });
-}
-
-// Copy EVERY formula row — formula, colour, opacity, centre and rotation — as
-// new rows after the existing ones, so a whole set can be moved/rotated/recoloured
-// together. The copies are verbatim: identical rows collapse into one curve
-// (collectSpecs' dedupe rule), so the graph looks unchanged until a copy is
-// edited — which is exactly the point (edit the copy, not the original).
-// The MAX_ROWS ceiling still applies: only the copies that fit are added, and a
-// partial duplication says so.
-function duplicateRows() {
-  const box = document.getElementById('formulaRows');
-  const src = Array.from(box.querySelectorAll('.formula-row'));
-  const room = MAX_ROWS - src.length;
-  if (!src.length || room <= 0) return;
-  const take = Math.min(room, src.length);
-  const FIELDS = ['.formula-input', '.color-pick', '.hex-pick', '.opacity-pick',
-                  '.ctr-x', '.ctr-y', '.rot-pick'];
-  src.slice(0, take).forEach(function (row) {
-    const copy = row.cloneNode(true);
-    // cloneNode copies the ATTRIBUTES (the server-rendered values), not what
-    // has been typed into the row since — copy the live values explicitly.
-    FIELDS.forEach(function (sel) {
-      const from = row.querySelector(sel), to = copy.querySelector(sel);
-      if (from && to) to.value = from.value;
-    });
-    copy.querySelectorAll('input').forEach(function (inp) { inp.removeAttribute('id'); });
-    copy.querySelectorAll('label[for]').forEach(function (l) { l.removeAttribute('for'); });
-    box.appendChild(copy);
-  });
-  onRowsChanged();   // reindexes ids and refreshes the buttons
-  if (take < src.length) {
-    showError('Duplicated ' + take + ' of ' + src.length + ' rows — at most ' +
-              MAX_ROWS + ' formulas per graph.');
-  }
 }
 
 // Re-style the plotted curves (colour + opacity on canvas, legend, table)
@@ -2454,20 +2524,29 @@ function applyAccordions() {
 function applyTheme(t) {
   document.documentElement.setAttribute('data-theme', t);
   try { localStorage.setItem('xygh:theme', t); } catch (e) {}
-  document.getElementById('themeBtn').textContent = t === 'dark' ? '\u2600\ufe0f Light' : '\ud83c\udf19 Dark';
+  // The icon shows the action, as the old text label did: a sun while the dark
+  // theme is on (click for light), a moon while light is on.
+  const themeBtn = document.getElementById('themeBtn');
+  themeBtn.innerHTML = t === 'dark' ? ICON.sun : ICON.moon;
+  const themeLabel = t === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme';
+  themeBtn.title = themeLabel;
+  themeBtn.setAttribute('aria-label', themeLabel);
   redraw();
 }
 function toggleTheme() { applyTheme(currentTheme() === 'dark' ? 'light' : 'dark'); }
 function toggleGrid() {
   gridOn = !gridOn;
-  document.getElementById('gridBtn').textContent = gridOn ? 'Grid: on' : 'Grid: off';
+  setToggleState(document.getElementById('gridBtn'), gridOn,
+    'Grid: on — click to hide the grid lines', 'Grid: off — click to show the grid lines');
   redraw();
 }
 // Hide/show the axis furniture (lines, arrows, tick numbers, x/y labels).
 // Redraws only — the data, the view (pan/zoom) and the grid state are kept.
 function toggleAxes() {
   axesOn = !axesOn;
-  document.getElementById('axisBtn').textContent = axesOn ? 'Axis: on' : 'Axis: off';
+  setToggleState(document.getElementById('axisBtn'), axesOn,
+    'Axis: on — click to hide the axis lines, arrows, tick numbers and the x/y labels (the grid is a separate toggle)',
+    'Axis: off — click to show the axis lines, arrows, tick numbers and the x/y labels');
   redraw();
 }
 
@@ -2475,10 +2554,9 @@ function init() {
   const form = document.getElementById('form');
   form.addEventListener('submit', function (e) { e.preventDefault(); plot(); });
   document.getElementById('addFormulaBtn').addEventListener('click', function () { addFormulaRow(); });
-  document.getElementById('dupSetBtn').addEventListener('click', duplicateRows);
-  document.querySelectorAll('#formulaRows .row-del').forEach(function (b) {
-    b.addEventListener('click', function () { b.closest('.formula-row').remove(); onRowsChanged(); });
-  });
+  // Row buttons are DELEGATED (one listener) rather than bound per button:
+  // cloned rows would otherwise arrive without listeners — a duplicated row's
+  // remove button was dead (cloneNode copies nodes, never listeners).
   // Remember which formula row the user is working in, so chips fill that
   // row instead of always the first one.
   document.getElementById('formulaRows').addEventListener('focusin', function (e) {
@@ -2536,12 +2614,18 @@ function init() {
       }
     }
   });
-  // Palette popover (one shared panel): ▾ opens it for its own row; a swatch
-  // applies that colour; click-outside / Escape / resize / scroll dismiss it.
+  // All three per-row buttons in one delegated listener: the palette arrow
+  // (one shared panel; a swatch applies that colour; click-outside / Escape /
+  // resize / scroll dismiss it), duplicate-row and remove-row.
   buildPalette();
   document.getElementById('formulaRows').addEventListener('click', function (e) {
-    const btn = e.target && e.target.closest ? e.target.closest('.pal-btn') : null;
-    if (btn) openPalette(btn);
+    const t = e.target;
+    if (!t || !t.closest) return;
+    const row = t.closest('.formula-row');
+    if (!row) return;
+    if (t.closest('.pal-btn')) { openPalette(t.closest('.pal-btn')); return; }
+    if (t.closest('.row-dup')) { duplicateRow(row); return; }
+    if (t.closest('.row-del')) { row.remove(); onRowsChanged(); }
   });
   document.addEventListener('click', function (e) {
     const pop = document.getElementById('palPop');

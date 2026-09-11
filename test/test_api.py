@@ -1,6 +1,7 @@
 """API tests for app/main.py via FastAPI TestClient."""
 
 import math
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -278,11 +279,37 @@ def test_index_renders_palette_popover_with_presets():
     assert len(set(hexes)) == 32
 
 
-def test_index_renders_duplicate_set_button():
-    # "Duplicate set" clones every row (settings included) into new rows.
+def test_index_renders_duplicate_button_on_every_row():
+    # Duplication is at FORMULA level: every row carries a .row-dup icon button
+    # that inserts a copy of that row directly below it.
+    r = client.get("/", params=[("formula", "y = x"), ("formula", "y = 2x")])
+    assert r.status_code == 200
+    assert r.text.count('class="row-dup"') == 2
+    assert r.text.count('class="row-del"') == 2
+    # No set-level duplicate action any more.
+    assert 'id="dupSetBtn"' not in r.text
+
+
+def test_index_toolbar_is_icon_only_with_accessible_names():
+    # Each toolbar action is an inline-SVG icon button whose name is carried by
+    # aria-label + title (there is no visible text label to fall back on).
     r = client.get("/")
     assert r.status_code == 200
-    assert 'id="dupSetBtn"' in r.text
+    for btn_id, label in [
+        ("plotBtn", "Plot"),
+        ("addFormulaBtn", "Add formula"),
+        ("pngBtn", "Download PNG"),
+        ("copyBtn", "Copy link"),
+        ("themeBtn", "Switch to the dark theme"),   # light is the default theme
+        ("gridBtn", "Grid"),
+        ("axisBtn", "Axis"),
+    ]:
+        m = re.search(r'<button[^>]*id="%s".*?</button>' % btn_id, r.text, re.S)
+        assert m, btn_id
+        html = m.group(0)
+        assert "<svg" in html, btn_id
+        assert 'aria-label="%s"' % label in html, (btn_id, label)
+        assert "title=" in html, btn_id
 
 
 def test_template_max_rows_matches_api_limit():
@@ -299,12 +326,17 @@ def test_template_max_rows_matches_api_limit():
 
 
 def test_index_renders_grid_and_axis_toggles():
-    # Two independent view toggles next to the plot button: Grid (lines only)
-    # and Axis (axis lines, arrows, tick numbers and the x/y labels).
+    # Two independent ICON toggles next to the plot button: Grid (grid lines
+    # only) and Axis (axis lines, arrows, tick numbers and the x/y labels).
+    # An icon-only button carries its state in aria-pressed + the .on class.
     r = client.get("/")
     assert r.status_code == 200
-    assert 'id="gridBtn"' in r.text and "Grid: on" in r.text
-    assert 'id="axisBtn"' in r.text and "Axis: on" in r.text
+    grid = re.search(r'<button[^>]*id="gridBtn"[^>]*>', r.text)
+    axis = re.search(r'<button[^>]*id="axisBtn"[^>]*>', r.text)
+    assert grid and 'aria-pressed="true"' in grid.group(0)
+    assert "tool-toggle on" in grid.group(0)
+    assert axis and 'aria-pressed="true"' in axis.group(0)
+    assert "tool-toggle on" in axis.group(0)
 
 
 def test_api_points_polar():

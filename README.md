@@ -16,11 +16,12 @@ vertical asymptotes are skipped (the polyline breaks across an asymptote),
 so `tan` and reciprocal functions render cleanly.
 
 The graph is interactive: **drag to pan, scroll or pinch to zoom, double-click
-to reset**. A theme toggle (dark/light, persisted) and two independent view
-toggles sit next to the plot button — **Grid** (grid lines) and **Axis** (the
-axis lines, their arrowheads, the tick numbers and the `x`/`y` labels), so
-`Grid: on` + `Axis: off` gives an unlabelled grid and both off gives curves
-only. Every successful plot is remembered in a localStorage history row (last
+to reset**. The action bar next to the plot button is **icon-only** — labels
+live in the tooltips and accessible names: ▶ Plot, ＋ add formula, ⤓ download
+PNG, 🔗 copy link, and three view toggles — theme (dark/light, persisted),
+**Grid** (grid lines) and **Axis** (the axis lines, their arrowheads, the tick
+numbers and the `x`/`y` labels), each showing its state as an accented icon, so
+grid on + axis off gives an unlabelled grid and both off gives curves only. Every successful plot is remembered in a localStorage history row (last
 12, click a chip to re-plot, ✕ clear).
 
 **Plot up to 5 formulas at once** ("+ Add formula" adds an input row). Each
@@ -35,12 +36,13 @@ and its own **rotation** (∠, degrees about that centre, default 0, positive =
 anticlockwise). Centre + rotation turn one shape into many — place a polar
 flower at several centres and spin each copy in place; both are presentation
 only, applied to the computed points, so the solver, the API contract and the
-θ/r table keep the formula's own frame. **Duplicate set** copies every row —
-formula, colour, opacity, centre and rotation — into new rows (up to the
-5-formula ceiling, and it tells you when only part of the set fits), so a whole
-figure can be repeated in one click and then moved, rotated or recoloured.
-Copies are exact, so a duplicated row draws as the same curve until you edit
-it (and a link therefore only carries the rows that still differ). Fade overlapping curves to see
+θ/r table keep the formula's own frame. Every row has a **copy icon** that
+duplicates *that* formula — colour, opacity, centre and rotation included — as a
+new row directly below it (up to the 5-formula ceiling, where the icon hides),
+so a figure can be repeated and then moved, rotated or recoloured instead of
+being retyped. Copies are exact, so a duplicated row draws as the same curve
+until you edit it (and a link therefore only carries the rows that still
+differ). Fade overlapping curves to see
 intersections: the canvas stroke, point markers, legend/table swatches and
 inequality shading all follow the row's opacity. The shareable URL carries the
 formulas as repeated `formula=` params plus non-default

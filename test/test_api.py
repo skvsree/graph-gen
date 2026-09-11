@@ -278,6 +278,26 @@ def test_index_renders_palette_popover_with_presets():
     assert len(set(hexes)) == 32
 
 
+def test_index_renders_duplicate_set_button():
+    # "Duplicate set" clones every row (settings included) into new rows.
+    r = client.get("/")
+    assert r.status_code == 200
+    assert 'id="dupSetBtn"' in r.text
+
+
+def test_template_max_rows_matches_api_limit():
+    # The UI row ceiling (JS MAX_ROWS) must not drift from the server's
+    # MAX_FORMULAS, or the page can offer rows the API rejects with a 400.
+    import re
+
+    from app.main import MAX_FORMULAS
+
+    r = client.get("/")
+    m = re.search(r"MAX_ROWS = (\d+)", r.text)
+    assert m, "MAX_ROWS not found in template"
+    assert int(m.group(1)) == MAX_FORMULAS
+
+
 def test_index_renders_grid_and_axis_toggles():
     # Two independent view toggles next to the plot button: Grid (lines only)
     # and Axis (axis lines, arrows, tick numbers and the x/y labels).

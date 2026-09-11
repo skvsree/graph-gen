@@ -35,7 +35,12 @@ and its own **rotation** (∠, degrees about that centre, default 0, positive =
 anticlockwise). Centre + rotation turn one shape into many — place a polar
 flower at several centres and spin each copy in place; both are presentation
 only, applied to the computed points, so the solver, the API contract and the
-θ/r table keep the formula's own frame. Fade overlapping curves to see
+θ/r table keep the formula's own frame. **Duplicate set** copies every row —
+formula, colour, opacity, centre and rotation — into new rows (up to the
+5-formula ceiling, and it tells you when only part of the set fits), so a whole
+figure can be repeated in one click and then moved, rotated or recoloured.
+Copies are exact, so a duplicated row draws as the same curve until you edit
+it (and a link therefore only carries the rows that still differ). Fade overlapping curves to see
 intersections: the canvas stroke, point markers, legend/table swatches and
 inequality shading all follow the row's opacity. The shareable URL carries the
 formulas as repeated `formula=` params plus non-default

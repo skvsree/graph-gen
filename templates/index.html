@@ -235,6 +235,7 @@
     </div>
     <button type="submit">Plot</button>
     <button type="button" class="btn-secondary" id="addFormulaBtn" title="Add another formula (max 5)">+ Add formula</button>
+    <button type="button" class="btn-secondary" id="dupSetBtn" title="Copy every formula row — formula, colour, opacity, centre and rotation — into new rows, so a whole set can be re-placed or rotated. Copies are identical, so they draw as one curve until you edit them.">Duplicate set</button>
     <button type="button" class="btn-secondary" id="pngBtn" title="Download the graph as PNG">Download PNG</button>
     <button type="button" class="btn-secondary" id="copyBtn" title="Copy a shareable link to this graph">Copy link</button>
     <button type="button" class="btn-secondary" id="themeBtn" title="Toggle dark / light theme">🌙 Dark</button>
@@ -1891,9 +1892,13 @@ function collectRotations() {
   return collectSpecs().map(function (s) { return s.rot; });
 }
 
+// The UI row ceiling — mirrors MAX_FORMULAS in app/main.py, kept in lockstep
+// by test_template_max_rows_matches_api_limit.
+const MAX_ROWS = 5;
+
 function addFormulaRow(value) {
   const rows = document.getElementById('formulaRows');
-  if (rows.querySelectorAll('.formula-row').length >= 5) return;
+  if (rows.querySelectorAll('.formula-row').length >= MAX_ROWS) return;
   const row = document.createElement('div');
   row.className = 'formula-row';
   const input = document.createElement('input');
@@ -2014,9 +2019,70 @@ function addFormulaRow(value) {
 }
 
 function onRowsChanged() {
+  reindexRows();
   const rows = document.querySelectorAll('#formulaRows .formula-row');
-  document.getElementById('addFormulaBtn').style.display = rows.length >= 5 ? 'none' : '';
+  const full = rows.length >= MAX_ROWS;
+  document.getElementById('addFormulaBtn').style.display = full ? 'none' : '';
+  // Duplicating needs room for at least one copy.
+  document.getElementById('dupSetBtn').style.display = (full || !rows.length) ? 'none' : '';
   rows.forEach(function (r) { r.querySelector('.row-del').hidden = rows.length === 1; });
+}
+
+// Keep the per-row label/input ids unique and in order. Cloned rows and
+// deletions would otherwise duplicate or gap them (the ids are only used by
+// the <label for> pairs and the #formula fallback, but duplicated ids are
+// invalid HTML and would break both).
+function reindexRows() {
+  const PREFIX = { 'opacity-pick': 'op', 'ctr-x': 'ctrX', 'ctr-y': 'ctrY', 'rot-pick': 'rot' };
+  document.querySelectorAll('#formulaRows .formula-row').forEach(function (row, i) {
+    Object.keys(PREFIX).forEach(function (cls) {
+      const inp = row.querySelector('.' + cls);
+      if (!inp) return;
+      inp.id = PREFIX[cls] + i;
+      const axis = inp.closest('.ctr-axis');
+      const lbl = axis ? axis.querySelector('label') : null;
+      if (lbl) lbl.setAttribute('for', inp.id);
+    });
+    const fin = row.querySelector('.formula-input');
+    if (fin) {
+      fin.removeAttribute('id');
+      if (i === 0) fin.id = 'formula';   // activeFormulaField() fallback
+    }
+  });
+}
+
+// Copy EVERY formula row — formula, colour, opacity, centre and rotation — as
+// new rows after the existing ones, so a whole set can be moved/rotated/recoloured
+// together. The copies are verbatim: identical rows collapse into one curve
+// (collectSpecs' dedupe rule), so the graph looks unchanged until a copy is
+// edited — which is exactly the point (edit the copy, not the original).
+// The MAX_ROWS ceiling still applies: only the copies that fit are added, and a
+// partial duplication says so.
+function duplicateRows() {
+  const box = document.getElementById('formulaRows');
+  const src = Array.from(box.querySelectorAll('.formula-row'));
+  const room = MAX_ROWS - src.length;
+  if (!src.length || room <= 0) return;
+  const take = Math.min(room, src.length);
+  const FIELDS = ['.formula-input', '.color-pick', '.hex-pick', '.opacity-pick',
+                  '.ctr-x', '.ctr-y', '.rot-pick'];
+  src.slice(0, take).forEach(function (row) {
+    const copy = row.cloneNode(true);
+    // cloneNode copies the ATTRIBUTES (the server-rendered values), not what
+    // has been typed into the row since — copy the live values explicitly.
+    FIELDS.forEach(function (sel) {
+      const from = row.querySelector(sel), to = copy.querySelector(sel);
+      if (from && to) to.value = from.value;
+    });
+    copy.querySelectorAll('input').forEach(function (inp) { inp.removeAttribute('id'); });
+    copy.querySelectorAll('label[for]').forEach(function (l) { l.removeAttribute('for'); });
+    box.appendChild(copy);
+  });
+  onRowsChanged();   // reindexes ids and refreshes the buttons
+  if (take < src.length) {
+    showError('Duplicated ' + take + ' of ' + src.length + ' rows — at most ' +
+              MAX_ROWS + ' formulas per graph.');
+  }
 }
 
 // Re-style the plotted curves (colour + opacity on canvas, legend, table)
@@ -2409,6 +2475,7 @@ function init() {
   const form = document.getElementById('form');
   form.addEventListener('submit', function (e) { e.preventDefault(); plot(); });
   document.getElementById('addFormulaBtn').addEventListener('click', function () { addFormulaRow(); });
+  document.getElementById('dupSetBtn').addEventListener('click', duplicateRows);
   document.querySelectorAll('#formulaRows .row-del').forEach(function (b) {
     b.addEventListener('click', function () { b.closest('.formula-row').remove(); onRowsChanged(); });
   });

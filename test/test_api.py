@@ -185,6 +185,53 @@ def test_index_centre_params_pad_when_fewer_than_rows():
     assert 'id="ctrX1" value=""' in r.text and 'id="ctrY1" value=""' in r.text
 
 
+def test_index_renders_rotation_inputs_per_formula():
+    # Each row carries a rotation field (degrees about that curve's own
+    # centre), defaulting to blank = 0 degrees (no rotation).
+    r = client.get("/", params=[("formula", "y = x"), ("formula", "y = 2x")])
+    assert r.status_code == 200
+    assert r.text.count('class="rot-pick"') == 2
+    assert 'id="rot0" value="" placeholder="0"' in r.text
+
+
+def test_index_prefills_rotation_params_in_order():
+    r = client.get(
+        "/",
+        params=[("formula", "y = x"), ("formula", "y = 2x"), ("rot", "45"), ("rot", "-0.5")],
+    )
+    assert r.status_code == 200
+    assert 'id="rot0" value="45"' in r.text
+    assert 'id="rot1" value="-0.5"' in r.text
+
+
+def test_index_rotation_params_fallback_to_zero():
+    # Invalid + missing rot params fall back to the blank (0 degrees) default
+    # for that position; a param can never inject markup.
+    r = client.get(
+        "/",
+        params=[("formula", "y = x"), ("rot", "not-a-number"), ("rot", '"><script>alert(1)</script>')],
+    )
+    assert r.status_code == 200
+    assert "<script>alert(1)</script>" not in r.text
+    assert 'id="rot0" value=""' in r.text
+
+
+def test_index_rotation_params_pad_when_fewer_than_rows():
+    # One rot param for two rows: the second row keeps its default (blank).
+    r = client.get("/", params=[("formula", "y = x"), ("formula", "y = 2x"), ("rot", "90")])
+    assert r.status_code == 200
+    assert 'id="rot0" value="90"' in r.text
+    assert 'id="rot1" value=""' in r.text
+
+
+def test_index_rotation_param_round_trips_scientific_notation():
+    # Rotation values are kept as strings, so whatever a type=number input
+    # produced (here 1e2 = 100 degrees) round-trips through the share URL.
+    r = client.get("/", params=[("formula", "y = x"), ("rot", "1e2")])
+    assert r.status_code == 200
+    assert 'id="rot0" value="1e2"' in r.text
+
+
 def test_template_palette_matches_js_palette():
     # The server's CURVE_PALETTE and the template's must stay in lockstep so a
     # URL without color= params renders the same defaults the client expects.

@@ -21,12 +21,19 @@ next to the plot button, and every successful plot is remembered in a
 localStorage history row (last 12, click a chip to re-plot, ✕ clear).
 
 **Plot up to 5 formulas at once** ("+ Add formula" adds an input row). Each
-row owns its curve's **colour** (native picker) and **line opacity** (a
-percent field, 0–100, default 100) — fade overlapping curves to see
-intersections; the canvas stroke, point markers, legend/table swatches and
+row owns its curve's **colour** (native picker), **line opacity** (a percent
+field, 0–100, default 100) and two presentation transforms: its own **centre**
+(x/y, default 0,0 — the point on the graph where that curve's own (0,0) sits)
+and its own **rotation** (∠, degrees about that centre, default 0, positive =
+anticlockwise). Centre + rotation turn one shape into many — place a polar
+flower at several centres and spin each copy in place; both are presentation
+only, applied to the computed points, so the solver, the API contract and the
+θ/r table keep the formula's own frame. Fade overlapping curves to see
+intersections: the canvas stroke, point markers, legend/table swatches and
 inequality shading all follow the row's opacity. The shareable URL carries the
-formulas as repeated `formula=` params plus non-default `color=`/`op=`
-params:
+formulas as repeated `formula=` params plus non-default
+`color=`/`op=`/`cx=`/`cy=`/`rot=` params
+(`/?formula=r%3D2%CE%B8&mode=polar&cx=8&cy=2&rot=45`):
 `/?formula=y%3Dsin(x)&formula=y%3Dcos(x)&x_min=0&x_max=6.28`. One shared
 x-range/step applies to all curves.
 

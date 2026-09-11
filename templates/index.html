@@ -52,13 +52,15 @@
   .range-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   .range-label { color: var(--muted); font-size: 13px; }
   #formulaRows { display: flex; flex-direction: column; gap: 8px; width: 100%; }
-  .formula-row { display: flex; gap: 8px; align-items: center; width: 100%; }
+  .formula-row { display: flex; gap: 8px; align-items: center; width: 100%; flex-wrap: wrap; }
   /* Per-formula centre offset: where this curve's own (0,0) sits on the
      graph (default 0,0). x/y micro-labels stack above the inputs. */
   .ctr { display: inline-flex; align-items: flex-end; gap: 6px; flex: none; }
   .ctr-axis { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; }
   .ctr-lbl { font-size: 10.5px; line-height: 1; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
   .ctr input[type=number] { width: 64px; padding: 8px 6px; text-align: center; }
+  /* Per-formula rotation (degrees about the curve's own centre, default 0). */
+  .rot-ctr .ctr-lbl { font-size: 13px; text-transform: none; }
   .ctr input[type=number]::-webkit-inner-spin-button { opacity: 0.4; }
   .color-dot {
     width: 14px; height: 14px; border-radius: 50%; flex: none;
@@ -176,6 +178,12 @@
           <span class="ctr-axis">
             <label class="ctr-lbl" for="ctrY{{ loop.index0 }}">y</label>
             <input type="number" class="ctr-y" id="ctrY{{ loop.index0 }}" value="{{ centers[loop.index0][1] }}" placeholder="0" min="-1000000" max="1000000" step="any">
+          </span>
+        </span>
+        <span class="ctr rot-ctr" title="This formula's rotation in degrees about its own centre (default 0) — positive turns the curve anticlockwise on screen">
+          <span class="ctr-axis">
+            <label class="ctr-lbl" for="rot{{ loop.index0 }}">&ang;</label>
+            <input type="number" class="rot-pick" id="rot{{ loop.index0 }}" value="{{ rotations[loop.index0] }}" placeholder="0" min="-1000000" max="1000000" step="any">
           </span>
         </span>
         <button type="button" class="row-del" title="Remove this formula"{% if formulas|length == 1 %} hidden{% endif %}>&times;</button>
@@ -1578,6 +1586,12 @@ function paletteAt(i) { return CURVE_PALETTE[i % CURVE_PALETTE.length]; }
 // opaque. Mirrored server-side as DEFAULT_OPACITY in app/main.py.
 const DEFAULT_OPACITY = 100;
 
+// Per-row rotation, in degrees about the row's own centre (cx, cy).
+// 0 = as typed; positive turns the curve anticlockwise on screen. Purely a
+// client-side presentation transform — solver/API/twin parity untouched.
+// Mirrored server-side as DEFAULT_ROTATION in app/main.py.
+const DEFAULT_ROTATION = 0;
+
 // Opacity percent -> canvas alpha (0..1). Blank/invalid -> fully opaque.
 function opToAlpha(op) {
   const n = (op === undefined || op === null) ? DEFAULT_OPACITY : Number(op);
@@ -1674,6 +1688,16 @@ function ctrNum(v) {
   return isFinite(n) ? n : 0;
 }
 
+// Parse a rotation input's value (degrees). Blank/invalid -> 0 (no rotation),
+// which is also the default — a blank field must not show as "rotated 0°"
+// (transformLabel only annotates non-zero angles).
+function rotNum(v) {
+  const t = String(v == null ? '' : v).trim();
+  if (t === '') return DEFAULT_ROTATION;
+  const n = parseFloat(t);
+  return isFinite(n) ? n : DEFAULT_ROTATION;
+}
+
 // Parse an opacity input's value (percent, 0..100). Blank/invalid clamp to
 // 100 (fully opaque — the default); out-of-range clamps into 0..100.
 function opNum(v) {
@@ -1684,10 +1708,10 @@ function opNum(v) {
   return Math.min(100, Math.max(0, n));
 }
 
-// The per-row "curve specs" in row order, deduped on formula + centre
-// (identical rows collapse; the same formula at a different centre is a
-// separate curve). Every downstream list — formulas, colours, centres —
-// derives from here so they always stay index-aligned.
+// The per-row "curve specs" in row order, deduped on formula + centre +
+// rotation (identical rows collapse; the same formula at a different centre
+// or angle is a separate curve). Every downstream list — formulas, colours,
+// centres, rotations — derives from here so they stay index-aligned.
 function collectSpecs() {
   const specs = [];
   const seen = {};
@@ -1696,10 +1720,12 @@ function collectSpecs() {
     if (!f) return;
     const cx = ctrNum(row.querySelector('.ctr-x').value);
     const cy = ctrNum(row.querySelector('.ctr-y').value);
-    const key = f + '|' + cx + '|' + cy;
+    const rotEl = row.querySelector('.rot-pick');
+    const rot = rotEl ? rotNum(rotEl.value) : DEFAULT_ROTATION;
+    const key = f + '|' + cx + '|' + cy + '|' + rot;
     if (seen[key]) return;
     seen[key] = true;
-    specs.push({ formula: f, cx: cx, cy: cy, color: row.querySelector('.color-pick').value, op: opNum(row.querySelector('.opacity-pick').value), key: key });
+    specs.push({ formula: f, cx: cx, cy: cy, rot: rot, color: row.querySelector('.color-pick').value, op: opNum(row.querySelector('.opacity-pick').value), key: key });
   });
   return specs;
 }
@@ -1712,6 +1738,11 @@ function collectFormulas() {
 // (cx, cy) per curve, aligned with collectFormulas()/collectColors().
 function collectCenters() {
   return collectSpecs().map(function (s) { return { x: s.cx, y: s.cy }; });
+}
+
+// Rotation in degrees per curve, aligned with collectFormulas()/collectColors().
+function collectRotations() {
+  return collectSpecs().map(function (s) { return s.rot; });
 }
 
 function addFormulaRow(value) {
@@ -1776,6 +1807,26 @@ function addFormulaRow(value) {
   };
   const ctrX = mkAxis('ctr-x', 'x');
   const ctrY = mkAxis('ctr-y', 'y');
+  // Rotation in degrees about this curve's own centre (default 0 = as typed).
+  const rot = document.createElement('span');
+  rot.className = 'ctr rot-ctr';
+  rot.title = "This formula's rotation in degrees about its own centre (default 0) — positive turns the curve anticlockwise on screen";
+  const rotAxis = document.createElement('span');
+  rotAxis.className = 'ctr-axis';
+  const rotLbl = document.createElement('label');
+  rotLbl.className = 'ctr-lbl';
+  rotLbl.textContent = '\u2220';
+  const rotIn = document.createElement('input');
+  rotIn.type = 'number';
+  rotIn.className = 'rot-pick';
+  rotIn.placeholder = '0';
+  rotIn.min = '-1000000';
+  rotIn.max = '1000000';
+  rotIn.step = 'any';
+  rotIn.value = '';
+  rotAxis.appendChild(rotLbl);
+  rotAxis.appendChild(rotIn);
+  rot.appendChild(rotAxis);
   const del = document.createElement('button');
   del.type = 'button';
   del.className = 'row-del';
@@ -1786,6 +1837,7 @@ function addFormulaRow(value) {
   row.appendChild(pick);
   row.appendChild(opWrap);
   row.appendChild(ctr);
+  row.appendChild(rot);
   row.appendChild(del);
   rows.appendChild(row);
   input.focus();
@@ -1821,10 +1873,14 @@ function applyPickerColours() {
 
 /* ================= UI ================= */
 
-// " · centre (cx, cy)" for curves whose centre isn't the default 0,0.
-function centreLabel(c) {
-  if ((!c || (c.cx === 0 && c.cy === 0))) return '';
-  return '  · centre (' + fmt(c.cx) + ', ' + fmt(c.cy) + ')';
+// " · centre (cx, cy) · rotated N°" for curves transformed away from the
+// defaults — each part is shown only when it isn't the default (0,0 / 0°).
+function transformLabel(c) {
+  if (!c) return '';
+  let s = '';
+  if (c.cx !== 0 || c.cy !== 0) s += '  · centre (' + fmt(c.cx) + ', ' + fmt(c.cy) + ')';
+  if (c.rot) s += '  · rotated ' + fmt(c.rot) + '\u00b0';
+  return s;
 }
 
 function renderTable(curves, colors) {
@@ -1837,7 +1893,7 @@ function renderTable(curves, colors) {
     const color = (colors && colors[ci]) || '#2563eb';
     html += '<tr class="branch-hdr"><td colspan="2">' +
       '<span class="dot-inline" style="background:' + colorWithAlpha(color, opToAlpha(c.opacity)) + '"></span>' +
-      c.display + centreLabel(c) + '</td></tr>';
+      c.display + transformLabel(c) + '</td></tr>';
     c.branches.forEach(function (br) {
       if (c.branches.length > 1) {
         html += '<tr class="branch-hdr"><td colspan="2">&nbsp;&nbsp;branch ' + br.label + '</td></tr>';
@@ -1861,7 +1917,7 @@ function renderLegend(curves) {
     dot.className = 'color-dot';
     dot.style.background = colorWithAlpha(c.color, opToAlpha(c.opacity));
     const label = document.createElement('span');
-    label.textContent = c.display + (c.inequality ? '  ' + c.inequality.op : '') + centreLabel(c);
+    label.textContent = c.display + (c.inequality ? '  ' + c.inequality.op : '') + transformLabel(c);
     item.appendChild(dot);
     item.appendChild(label);
     lg.appendChild(item);
@@ -1956,6 +2012,10 @@ function rangeParams(formulas) {
   if (anyOpacity) specs.forEach(function (s) { p.append('op', s.op); });
   const anyCenter = specs.some(function (s) { return s.cx !== 0 || s.cy !== 0; });
   if (anyCenter) specs.forEach(function (s) { p.append('cx', s.cx); p.append('cy', s.cy); });
+  // Rotation params — same rule again: only when SOME row differs from the
+  // default (0°), then the FULL list so rows stay aligned by index.
+  const anyRotation = specs.some(function (s) { return s.rot !== DEFAULT_ROTATION; });
+  if (anyRotation) specs.forEach(function (s) { p.append('rot', s.rot); });
   return p;
 }
 
@@ -2029,20 +2089,31 @@ async function plot() {
   document.getElementById('solved').textContent =
     'Given:  ' + given + '    \u2192    ' + displays +
     '    (plotted for ' + rangeVar + ' = ' + rng.min + ' \u2026 ' + rng.max + stepNote + multiNote + ')';
-  // Canvas model: curve + colour + centre. Points are shifted by the row's
-  // centre (cx, cy) — that formula's own (0,0) sits at (cx, cy) on the
-  // shared plane. Polar θ/r table columns keep the formula's own frame.
+  // Canvas model: curve + colour + centre + rotation. Every point is turned
+  // by the row's angle ABOUT that row's own centre, then shifted so the
+  // formula's own (0,0) sits at (cx, cy) on the shared plane — so centre and
+  // rotation compose as "place it there, spin it in place". Both are
+  // presentation-only (client-side): the solver, /api/points and the twin
+  // parity corpus never see them. Polar θ/r table columns keep the formula's
+  // own frame (unrotated, untranslated) so the table still reads as the input.
   const centers = collectCenters();
+  const rots = collectRotations();
   const ops = collectSpecs().map(function (s) { return s.op; });
   const curves = data.curves.map(function (c, i) {
     const cx = (centers[i] && centers[i].x) || 0;
     const cy = (centers[i] && centers[i].y) || 0;
-    const off = cx !== 0 || cy !== 0;
-    const branches = off ? c.branches.map(function (br) {
+    const rot = (rots[i] === undefined) ? DEFAULT_ROTATION : rots[i];
+    const rad = rot * Math.PI / 180;
+    const cos = Math.cos(rad), sin = Math.sin(rad);
+    const moved = cx !== 0 || cy !== 0 || rot !== DEFAULT_ROTATION;
+    const branches = moved ? c.branches.map(function (br) {
       return {
         label: br.label,
         points: br.points.map(function (p) {
-          const q = { x: p.x + cx, y: p.y + cy };
+          const q = {
+            x: p.x * cos - p.y * sin + cx,
+            y: p.x * sin + p.y * cos + cy,
+          };
           if (p.theta !== undefined) { q.theta = p.theta; q.r = p.r; }
           return q;
         }),
@@ -2056,6 +2127,7 @@ async function plot() {
       inequality: c.inequality,
       cx: cx,
       cy: cy,
+      rot: rot,
     };
   });
   lastCurves = curves;
@@ -2179,12 +2251,13 @@ function init() {
       applyPickerColours();
     }
   });
-  // A centre change moves the curve — replot on commit (Enter or blur), not
-  // per keystroke while typing the offset. An opacity commit just normalises
-  // the field (blank/out-of-range -> the effective clamped value).
+  // A centre or rotation change moves the curve — replot on commit (Enter or
+  // blur), not per keystroke while typing the number. An opacity commit just
+  // normalises the field (blank/out-of-range -> the effective clamped value).
   document.getElementById('formulaRows').addEventListener('change', function (e) {
     if (e.target && e.target.classList &&
-        (e.target.classList.contains('ctr-x') || e.target.classList.contains('ctr-y'))) {
+        (e.target.classList.contains('ctr-x') || e.target.classList.contains('ctr-y') ||
+         e.target.classList.contains('rot-pick'))) {
       plot();
     }
     if (e.target && e.target.classList && e.target.classList.contains('opacity-pick')) {

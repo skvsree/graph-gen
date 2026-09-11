@@ -34,11 +34,15 @@ MODES = {"cartesian", "polar"}
 # keeps the two in lockstep.
 CURVE_PALETTE = ["#dc2626", "#16a34a", "#2563eb", "#0891b2", "#0d9488"]
 DEFAULT_OPACITY = 100  # per-row line opacity in percent (0..100), default opaque
+DEFAULT_ROTATION = 0    # per-row rotation in degrees about the curve's own centre
 _COLOR_RE = re.compile(r"^#[0-9a-f]{6}$")
-# A per-row centre offset (cx, cy), default 0,0. Accepts plain decimals
-# and scientific notation so whatever a type=number input produced
-# round-trips through the share URL unchanged.
-_CENTER_RE = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
+# A per-row numeric field -- centre offset (cx, cy) or rotation (rot, degrees).
+# Accepts plain decimals and scientific notation, and is kept as a string so
+# whatever a type=number input produced round-trips through the share URL
+# unchanged. Anything else is dropped, so a malformed param can never inject
+# markup into the page.
+_NUM_RE = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
+_CENTER_RE = _NUM_RE
 
 # ---------------------------------------------------------------------------
 # Caching: small in-process TTL cache for /api/points responses.
@@ -196,6 +200,23 @@ def _clean_centers(raw_x: list[str], raw_y: list[str], n: int) -> list[tuple[str
     return centers
 
 
+def _clean_rotations(raw: list[str], n: int) -> list[str]:
+    """Validate repeated `rot` params (degrees) and pad to length n.
+
+    Each row's rotation defaults to ``DEFAULT_ROTATION`` (0 degrees = the
+    curve as typed) -- an empty/invalid value becomes ``""`` (the template
+    renders it as a blank input whose placeholder reads 0). Values are kept
+    as strings (never re-parsed through float) so they round-trip through the
+    share URL exactly as typed. A malformed param can therefore never inject
+    markup.
+    """
+    rotations = []
+    for i in range(n):
+        v = raw[i].strip() if i < len(raw) else ""
+        rotations.append(v if _NUM_RE.fullmatch(v) else "")
+    return rotations
+
+
 def _check_mode(mode: str) -> None:
     if mode not in MODES:
         raise HTTPException(status_code=400, detail="mode must be 'cartesian' or 'polar'.")
@@ -209,6 +230,7 @@ def index(
     op: list[str] = Query(default=[]),
     cx: list[str] = Query(default=[]),
     cy: list[str] = Query(default=[]),
+    rot: list[str] = Query(default=[]),
     mode: str = "cartesian",
     x_min: str | None = None,
     x_max: str | None = None,
@@ -222,7 +244,8 @@ def index(
     repeated ``?color=#rrggbb`` params pre-fill each row's colour picker,
     repeated ``?op=…`` params pre-fill each row's line opacity (percent
     0..100, default 100), and repeated ``?cx=…&cy=…`` params pre-fill each
-    row's centre offset (default 0,0).
+    row's centre offset (default 0,0). Repeated ``?rot=`` params pre-fill
+    each row's rotation in degrees about that centre (default 0).
     """
     global _page_hits
     _check_mode(mode)
@@ -230,6 +253,7 @@ def index(
     colors = _clean_colors(color, len(formulas))
     opacities = _clean_opacities(op, len(formulas))
     centers = _clean_centers(cx, cy, len(formulas))
+    rotations = _clean_rotations(rot, len(formulas))
     with _metrics_lock:
         _page_hits += 1
     hits = _page_hits
@@ -241,6 +265,7 @@ def index(
             "colors": colors[:MAX_FORMULAS],
             "opacities": opacities[:MAX_FORMULAS],
             "centers": centers[:MAX_FORMULAS],
+            "rotations": rotations[:MAX_FORMULAS],
             "mode": mode,
             "x_min": x_min or "",
             "x_max": x_max or "",

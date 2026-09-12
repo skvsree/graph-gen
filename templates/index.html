@@ -162,6 +162,15 @@
     color: var(--accent); background: var(--chip-hover); border-color: var(--accent);
   }
   .tool-sep { width: 1px; height: 22px; background: var(--border); flex: none; margin: 0 1px; }
+  /* Tick confirmation on the icon-only buttons (see flashButton). */
+  .tool-btn.flash-ok { color: #16a34a; border-color: #16a34a; }
+  /* Install hint (iOS Safari has no beforeinstallprompt, so the button
+     explains the Share → Add to Home Screen route instead). */
+  .install-hint {
+    margin: 0 0 12px; padding: 9px 12px; font-size: 13.5px; color: var(--fg-soft);
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .install-hint strong { color: var(--fg); }
   .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
   .chip {
     font-family: ui-monospace, Consolas, monospace; font-size: 13px;
@@ -286,6 +295,9 @@
     <button type="button" class="btn-secondary tool-btn" id="copyBtn" title="Copy a shareable link to this graph" aria-label="Copy link">
       <svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="s" d="M7.4 10.6a3 3 0 0 0 4.3 0l2.5-2.5a3 3 0 0 0-4.3-4.3l-1 1"/><path class="s" d="M10.6 7.4a3 3 0 0 0-4.3 0l-2.5 2.5a3 3 0 0 0 4.3 4.3l1-1"/></svg>
     </button>
+    <button type="button" class="btn-secondary tool-btn" id="shareBtn" title="Share the graph image (share sheet, clipboard, or download)" aria-label="Share image">
+      <svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="s" d="M9 11.4V2.6M6.2 5.2 9 2.4l2.8 2.8"/><path class="s" d="M4.4 8.1H3.2v7.1h11.6V8.1h-1.2"/></svg>
+    </button>
     <span class="tool-sep" aria-hidden="true"></span>
     <button type="button" class="btn-secondary tool-btn tool-toggle" id="themeBtn" title="Switch to the dark theme" aria-label="Switch to the dark theme">
       <svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="s" d="M14.6 11.5A6 6 0 0 1 6.5 3.4a6 6 0 1 0 8.1 8.1Z"/></svg>
@@ -296,7 +308,13 @@
     <button type="button" class="btn-secondary tool-btn tool-toggle on" id="axisBtn" title="Axis: on — click to hide the axis lines, arrows, tick numbers and the x/y labels (the grid is a separate toggle)" aria-label="Axis" aria-pressed="true">
       <svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="s" d="M2.4 9h13.2M12.6 6.2 15.6 9l-3 2.8M9 15.6V2.4M6.2 5.4 9 2.4l2.8 3"/></svg>
     </button>
+    <!-- Install: hidden until the browser offers an install prompt (or iOS
+         Safari, which never fires beforeinstallprompt and gets the hint). -->
+    <button type="button" class="btn-secondary tool-btn" id="installBtn" hidden title="Install xy-graph-gen as an app" aria-label="Install app">
+      <svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><rect class="s" x="5.2" y="2.4" width="7.6" height="13.2" rx="1.8"/><path class="s" d="M9 5.6v4.6M7.1 8.3 9 10.2l1.9-1.9"/></svg>
+    </button>
   </form>
+  <p id="installHint" class="install-hint" hidden></p>
 
   <div class="pal-pop" id="palPop" hidden>
     <div class="pal-grid" id="palGrid" role="listbox" aria-label="Colour palette"></div>
@@ -1971,6 +1989,8 @@ const ICON = {
        '<circle class="s" cx="9" cy="9" r="3.3"/>' +
        '<path class="s" d="M9 1.7v1.9M9 14.4v1.9M1.7 9h1.9M14.4 9h1.9M3.9 3.9l1.3 1.3M12.8 12.8l1.3 1.3' +
        'M14.1 3.9l-1.3 1.3M5.2 12.8l-1.3 1.3"/></svg>',
+  check: '<svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false">' +
+         '<path class="s" d="M3.6 9.6 7.2 13.2 14.4 5.4"/></svg>',
 };
 
 // Set a toggle button's on/off look (icon colour + aria-pressed + tooltip), so
@@ -2279,14 +2299,30 @@ function exportPng() {
   a.remove();
 }
 
+// Transient confirmation inside an ICON-ONLY button: swap the glyph for a tick
+// and repoint the tooltip. (The old copy feedback wrote to `textContent`, which
+// in an icon-only button replaced the SVG — and "restored" an empty button.)
+function flashButton(btn, label) {
+  if (!btn) return;
+  if (!btn.__flashHtml) btn.__flashHtml = btn.innerHTML;
+  const prevTitle = btn.getAttribute('title');
+  const prevLabel = btn.getAttribute('aria-label');
+  btn.innerHTML = ICON.check;
+  btn.classList.add('flash-ok');
+  btn.setAttribute('title', label);
+  btn.setAttribute('aria-label', label);
+  clearTimeout(btn.__flashTimer);
+  btn.__flashTimer = setTimeout(function () {
+    btn.innerHTML = btn.__flashHtml;
+    btn.classList.remove('flash-ok');
+    btn.setAttribute('title', prevTitle);
+    btn.setAttribute('aria-label', prevLabel);
+  }, 1600);
+}
+
 function copyLink() {
   const url = location.href;
-  const flash = () => {
-    const btn = document.getElementById('copyBtn');
-    const old = btn.textContent;
-    btn.textContent = 'Copied!';
-    setTimeout(() => { btn.textContent = old; }, 1500);
-  };
+  const done = () => flashButton(document.getElementById('copyBtn'), 'Link copied');
   const fallback = () => {
     const ta = document.createElement('textarea');
     ta.value = url;
@@ -2294,13 +2330,62 @@ function copyLink() {
     ta.select();
     try { document.execCommand('copy'); } catch (e) {}
     ta.remove();
-    flash();
+    done();
   };
   if (navigator.clipboard && window.isSecureContext) {
-    navigator.clipboard.writeText(url).then(flash, fallback);
+    navigator.clipboard.writeText(url).then(done, fallback);
   } else {
     fallback();
   }
+}
+
+// Share the graph IMAGE. Three routes, best first:
+//   1. the OS share sheet (Web Share Level 2 with a File) — phones get
+//      WhatsApp/Mail/etc. directly;
+//   2. the image clipboard (desktop Chromium) — paste straight into a chat;
+//   3. download the PNG (the same file the ⤓ button produces).
+function graphPngBlob(cb) {
+  const cv = document.getElementById('graph');
+  if (cv.toBlob) {
+    cv.toBlob(function (blob) { cb(blob); }, 'image/png');
+    return;
+  }
+  // Very old browsers: no toBlob — hand the data URL straight to the download.
+  cb(null);
+}
+
+function shareImage() {
+  const btn = document.getElementById('shareBtn');
+  const url = location.href;
+  graphPngBlob(function (blob) {
+    if (!blob) { exportPng(); flashButton(btn, 'Image downloaded'); return; }
+    let file = null;
+    try {
+      file = new File([blob], 'xy-graph.png', { type: 'image/png' });
+    } catch (e) { file = null; }
+    if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: 'xy-graph-gen', text: 'Plotted with xy-graph-gen: ' + url })
+        .then(function () { flashButton(btn, 'Image shared'); })
+        .catch(function (err) {
+          // A cancelled share sheet is not an error worth a second attempt.
+          if (err && err.name === 'AbortError') return;
+          copyImage(blob, btn);
+        });
+      return;
+    }
+    copyImage(blob, btn);
+  });
+}
+
+function copyImage(blob, btn) {
+  if (navigator.clipboard && window.ClipboardItem && window.isSecureContext) {
+    navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+      .then(function () { flashButton(btn, 'Image copied — paste it anywhere'); })
+      .catch(function () { exportPng(); flashButton(btn, 'Image downloaded'); });
+    return;
+  }
+  exportPng();
+  flashButton(btn, 'Image downloaded');
 }
 
 // Collect the formula + range inputs into a query string. Formulas become
@@ -2653,6 +2738,7 @@ function init() {
   window.addEventListener('scroll', closePalette, true);
   document.getElementById('pngBtn').addEventListener('click', exportPng);
   document.getElementById('copyBtn').addEventListener('click', copyLink);
+  document.getElementById('shareBtn').addEventListener('click', shareImage);
   document.getElementById('themeBtn').addEventListener('click', toggleTheme);
   document.getElementById('gridBtn').addEventListener('click', toggleGrid);
   document.getElementById('axisBtn').addEventListener('click', toggleAxes);
@@ -2720,6 +2806,64 @@ if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator
     navigator.serviceWorker.register('/sw.js').catch(function () { /* offline-first is best-effort */ });
   });
 }
+
+// --- PWA: install ---------------------------------------------------------
+// The #installBtn button stays hidden until there is something to do:
+//   - Android/desktop Chrome fire `beforeinstallprompt` once the app is
+//     installable, and we replay that prompt on click;
+//   - iOS Safari never fires it, so the button appears with the manual
+//     Share -> Add to Home Screen route instead;
+//   - inside an installed window nothing appears at all.
+(function () {
+  // Guarded like the rest of the file: test/solver.test.js runs this script in
+  // a `vm` sandbox that has no document/navigator, and it must not throw.
+  if (typeof document === 'undefined' || typeof navigator === 'undefined') return;
+  const btn = document.getElementById('installBtn');
+  const hint = document.getElementById('installHint');
+  if (!btn) return;
+
+  const standalone = (typeof window.matchMedia === 'function'
+      && window.matchMedia('(display-mode: standalone)').matches)
+    || navigator.standalone === true;
+  const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent || '')
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  let deferred = null;
+
+  const reveal = function () { if (!standalone) btn.hidden = false; };
+  const hide = function () { btn.hidden = true; if (hint) hint.hidden = true; };
+
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();   // keep the mini-infobar away; the button is ours
+    deferred = e;
+    reveal();
+  });
+  window.addEventListener('appinstalled', function () {
+    deferred = null;
+    hide();
+  });
+  if (isIos && !standalone) reveal();
+
+  btn.addEventListener('click', function () {
+    if (deferred) {
+      const prompt = deferred;
+      deferred = null;
+      try { prompt.prompt(); } catch (e) { /* already used / not allowed */ }
+      const choice = prompt.userChoice;
+      if (choice && choice.then) {
+        choice.then(function (c) {
+          if (c && c.outcome === 'accepted') hide();
+        }, function () {});
+      }
+      return;
+    }
+    if (hint) {
+      hint.innerHTML = isIos
+        ? 'To install: tap <strong>Share</strong> → <strong>Add to Home Screen</strong>.'
+        : 'To install: open the browser menu and choose <strong>Install app</strong> (or <strong>Add to Home screen</strong>).';
+      hint.hidden = false;
+    }
+  });
+})();
 </script>
 </body>
 </html>

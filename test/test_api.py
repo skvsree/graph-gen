@@ -547,7 +547,7 @@ def test_health_reports_version_and_uptime():
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert body["version"] == "0.7.0"
+    assert body["version"] == "0.8.0"
     assert body["uptime_s"] >= 0
 
 
@@ -769,3 +769,47 @@ def test_index_declares_pwa_metadata_and_registers_the_worker():
     assert '<meta name="theme-color"' in r.text
     assert 'rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png"' in r.text
     assert "serviceWorker.register('/sw.js')" in r.text
+
+
+def test_manifest_screenshots_are_wide_and_narrow_and_servable():
+    """Chrome's richer install sheet needs a >=1280x720 wide shot (plus narrow)."""
+    body = client.get("/manifest.webmanifest").json()
+    shots = {s["form_factor"]: s for s in body["screenshots"]}
+    assert {"wide", "narrow"} <= set(shots)
+    assert shots["wide"]["sizes"] == "1280x800"
+    assert shots["narrow"]["sizes"] == "720x1280"
+    for shot in shots.values():
+        assert shot["type"] == "image/png"
+        assert shot["label"]
+        r = client.get(shot["src"])
+        assert r.status_code == 200, shot["src"]
+        assert r.headers["content-type"] == "image/png"
+        assert r.content.startswith(b"\x89PNG\r\n\x1a\n")
+        # ...and the pixel size matches what the manifest claims.
+        import struct
+
+        w, h = struct.unpack(">II", r.content[16:24])
+        assert f"{w}x{h}" == shot["sizes"], (shot["src"], w, h)
+
+
+def test_screenshot_route_whitelists_png_names():
+    assert client.get("/screenshots/wide.png").status_code == 200
+    assert client.get("/screenshots/narrow.png").status_code == 200
+    assert client.get("/screenshots/nope.png").status_code == 404
+    assert client.get("/screenshots/wide.PNG").status_code == 404
+
+
+def test_index_has_share_and_install_controls():
+    text = client.get("/").text
+    # Share image (share sheet -> clipboard -> download) and the install button,
+    # which starts hidden until the browser offers a prompt.
+    assert 'id="shareBtn"' in text
+    assert "navigator.canShare" in text and "ClipboardItem" in text
+    assert 'id="installBtn"' in text and "hidden" in text
+    assert "beforeinstallprompt" in text and "appinstalled" in text
+    assert "display-mode: standalone" in text
+    assert 'id="installHint"' in text
+    # The old copy feedback wrote to textContent, which blanked the icon-only
+    # button; the tick flash must keep the SVG.
+    assert "function flashButton" in text and "ICON.check" in text
+    assert "btn.textContent = 'Copied!'" not in text

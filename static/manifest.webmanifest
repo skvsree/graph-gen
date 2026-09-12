@@ -39,6 +39,22 @@
       "purpose": "maskable"
     }
   ],
+  "screenshots": [
+    {
+      "src": "/screenshots/wide.png",
+      "sizes": "1280x800",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "A graph of y = sin(x) + cos(2x) with the formula rows, legend and points table"
+    },
+    {
+      "src": "/screenshots/narrow.png",
+      "sizes": "720x1280",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "The same graph on a phone-width layout"
+    }
+  ],
   "shortcuts": [
     {
       "name": "Cartesian plot",

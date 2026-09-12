@@ -18,7 +18,9 @@ so `tan` and reciprocal functions render cleanly.
 The graph is interactive: **drag to pan, scroll or pinch to zoom, double-click
 to reset**. The action bar next to the plot button is **icon-only** — labels
 live in the tooltips and accessible names: ▶ Plot, ＋ add formula, ⤓ download
-PNG, 🔗 copy link, and three view toggles — theme (dark/light, persisted),
+PNG, ↗ **share image** (the OS share sheet on a phone, the image clipboard on
+desktop, and a plain download as the last resort), 🔗 copy link, and three view
+toggles — theme (dark/light, persisted),
 **Grid** (grid lines) and **Axis** (the axis lines, their arrowheads, the tick
 numbers and the `x`/`y` labels), each showing its state as an accented icon, so
 grid on + axis off gives an unlabelled grid and both off gives curves only. Every successful plot is remembered in a localStorage history row (last
@@ -73,14 +75,19 @@ Open http://127.0.0.1:8123
 ## Install as an app (PWA)
 
 `xy.selviz.in` (and `http://127.0.0.1:8123`, which counts as a secure context)
-is installable: browser menu → **Install app** / **Add to Home screen**. It then
-opens in its own window with the graph on the launcher and in the task switcher.
+is installable: browser menu → **Install app** / **Add to Home screen**, or the
+**⬇ install icon in the toolbar** — it reveals itself as soon as the browser
+offers an install prompt (Android/desktop Chrome) and, on iOS Safari (which
+never fires `beforeinstallprompt`), it explains the *Share → Add to Home Screen*
+route instead. Inside an installed window it stays hidden. It then opens in its
+own window with the graph on the launcher and in the task switcher.
 
 | File | Role |
 |---|---|
-| `static/manifest.webmanifest` | name/short name, `standalone`, theme colours, 192/512 icons in `any` **and** `maskable` variants, Cartesian/Polar shortcuts (`/?mode=polar`) |
+| `static/manifest.webmanifest` | name/short name, `standalone`, theme colours, 192/512 icons in `any` **and** `maskable` variants, wide + narrow `screenshots` for the rich install sheet, Cartesian/Polar shortcuts (`/?mode=polar`) |
 | `static/sw.js` | the service worker — app-shell precache, offline plotting |
 | `static/icons/*.png` | launcher, maskable and apple-touch icons (regenerate with `python3 scripts/make_icons.py`) |
+| `static/screenshots/*.png` | install-sheet previews (regenerate with `/usr/bin/python3 scripts/make_screenshots.py`) |
 
 **Offline behaviour** — the shell (page, manifest, icons) is precached at
 install, so an offline reload still opens the app, and the case that matters:
@@ -97,11 +104,18 @@ install, so an offline reload still opens the app, and the case that matters:
   offline after one online visit.
 
 Bump `VERSION` in `static/sw.js` on any shell change (template, icons,
-manifest): the old caches are dropped on activate and the page reloads once via
-the `controllerchange` handler.
+manifest, screenshots): the old caches are dropped on activate and the page
+reloads once via the `controllerchange` handler.
 
-> Not yet done: an in-app **Install** button and manifest `screenshots` (the
-> richer Android install sheet). Chrome/Safari's own menu entries already work.
+**Sharing a graph** — three buttons, three jobs: ⤓ downloads the PNG, ↗ opens
+the OS share sheet with the image file (Web Share Level 2; falls back to the
+image clipboard on desktop Chromium, then to a download), and 🔗 copies the
+shareable URL. Every confirmation is a **✓ tick flashed inside the icon-only
+button** (`flashButton`) — never by writing to `textContent`, which used to
+blank the button's SVG.
+
+> The install sheet uses the wide + narrow screenshots above; nothing else is
+> required for installability.
 
 ## Endpoints
 
@@ -113,6 +127,7 @@ the `controllerchange` handler.
 | `GET /manifest.webmanifest` | Web app manifest (`application/manifest+json`, `Cache-Control: no-cache`) — what makes the page installable. |
 | `GET /sw.js` | The service worker, served from the origin root so its scope is `/` (`Service-Worker-Allowed: /`, `Cache-Control: no-cache`). |
 | `GET /icons/{name}` | PWA icons — whitelisted `*.png` names under `static/icons/` (anything else is a 404). |
+| `GET /screenshots/{name}` | Install-sheet screenshots — same whitelist under `static/screenshots/` (`wide.png`, `narrow.png`). |
 | `GET /metrics` | Prometheus-text counters: requests by method/path/status, durations, `/api/points` cache hits/misses, uptime. |
 | `GET /health` | Liveness probe: `{"status": "ok", "app": "xy-graph-gen", "version": …, "uptime_s": …}` |
 
@@ -191,8 +206,10 @@ static/
   manifest.webmanifest  PWA install metadata
   sw.js                 service worker (shell precache, offline /api/points)
   icons/                launcher / maskable / apple-touch PNGs
+  screenshots/          install-sheet previews (wide + narrow)
 scripts/
   make_icons.py  regenerates static/icons/ (needs Pillow, run with system python3)
+  make_screenshots.py   regenerates static/screenshots/ (needs Playwright)
 test/
   test_solver.py pytest unit tests for the solver
   test_api.py    pytest API tests (TestClient)
@@ -252,6 +269,8 @@ P3 = bigger / probably not worth it.
 - [ ] Points CSV export
 - [x] Dark mode / grid toggle
 - [x] Installable PWA: manifest + service worker + icon set (`static/`), opens standalone and keeps working offline — cached shell, cached `/api/points`, and the client solver for anything never plotted (`README` → Install as an app)
+- [x] PWA install button (in the toolbar, reveals on `beforeinstallprompt`, explains the iOS Share → Add to Home Screen route) + manifest `screenshots` for the rich install sheet
+- [x] Share graph image: OS share sheet (Web Share with a PNG File) → image clipboard → download, with a ✓ tick confirmation in the icon-only toolbar
 
 ### P3 — bigger / probably not
 - [x] General implicit curves (grid sampling / contour rendering — different plotter)

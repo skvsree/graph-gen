@@ -21,7 +21,7 @@ from . import solver
 
 log = logging.getLogger("xy-graph-gen")
 
-app = FastAPI(title="xy-graph-gen", version="0.7.0")
+app = FastAPI(title="xy-graph-gen", version="0.8.0")
 
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
@@ -265,6 +265,18 @@ def icon(name: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="Not found")
     return FileResponse(
         STATIC_DIR / "icons" / name,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@app.get("/screenshots/{name}")
+def screenshot(name: str) -> FileResponse:
+    """Manifest screenshots — they give Android's install sheet its preview."""
+    if not _ICON_RE.fullmatch(name) or not (STATIC_DIR / "screenshots" / name).is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(
+        STATIC_DIR / "screenshots" / name,
         media_type="image/png",
         headers={"Cache-Control": "public, max-age=86400"},
     )

@@ -14,16 +14,22 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from . import solver
 
 log = logging.getLogger("xy-graph-gen")
 
-app = FastAPI(title="xy-graph-gen", version="0.6.0")
+app = FastAPI(title="xy-graph-gen", version="0.7.0")
 
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
+
+# Progressive-web-app assets (manifest, service worker, icons). Served from
+# explicit routes rather than a StaticFiles mount because /sw.js must live at
+# the origin root to control the whole scope.
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+_ICON_RE = re.compile(r"^[a-z0-9][a-z0-9-]*\.png$")
 
 DEFAULT_FORMULA = "x + y = 3"
 MAX_FORMULAS = 5
@@ -220,6 +226,48 @@ def _clean_rotations(raw: list[str], n: int) -> list[str]:
 def _check_mode(mode: str) -> None:
     if mode not in MODES:
         raise HTTPException(status_code=400, detail="mode must be 'cartesian' or 'polar'.")
+
+
+# ---------------------------------------------------------------------------
+# PWA assets: manifest, service worker, icons.
+#
+# The service worker is served with `Cache-Control: no-cache` (it must be
+# revalidated on every load or a fixed bug stays fixed forever) and
+# `Service-Worker-Allowed: /` so its scope covers the whole origin. Icons get a
+# normal long-ish cache; they are also precached by the worker itself.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/manifest.webmanifest")
+def manifest() -> FileResponse:
+    """Web app manifest — what makes the page installable."""
+    return FileResponse(
+        STATIC_DIR / "manifest.webmanifest",
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/sw.js")
+def service_worker() -> FileResponse:
+    """Service worker (root scope: precaches the shell, offline /api/points)."""
+    return FileResponse(
+        STATIC_DIR / "sw.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"},
+    )
+
+
+@app.get("/icons/{name}")
+def icon(name: str) -> FileResponse:
+    """PWA launcher icons (whitelisted PNG names; no path traversal)."""
+    if not _ICON_RE.fullmatch(name) or not (STATIC_DIR / "icons" / name).is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(
+        STATIC_DIR / "icons" / name,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @app.get("/", response_class=HTMLResponse)

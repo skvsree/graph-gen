@@ -547,7 +547,7 @@ def test_health_reports_version_and_uptime():
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert body["version"] == "0.6.0"
+    assert body["version"] == "0.7.0"
     assert body["uptime_s"] >= 0
 
 
@@ -673,3 +673,99 @@ def test_health():
     r = client.get("/health")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# PWA: manifest, service worker, icons (static/*, served by app/main.py)
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_served_as_webmanifest_with_install_fields():
+    r = client.get("/manifest.webmanifest")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/manifest+json")
+    body = r.json()
+    assert body["name"].startswith("xy-graph-gen")
+    assert body["short_name"]
+    assert body["start_url"] == "/"
+    assert body["scope"] == "/"
+    assert body["display"] == "standalone"
+    assert body["theme_color"].startswith("#")
+    assert body["background_color"].startswith("#")
+
+
+def test_manifest_has_any_and_maskable_192_and_512_icons():
+    body = client.get("/manifest.webmanifest").json()
+    by_purpose: dict[str, set[str]] = {}
+    for icon in body["icons"]:
+        by_purpose.setdefault(icon.get("purpose", "any"), set()).add(icon["sizes"])
+        assert icon["type"] == "image/png"
+    # Chrome's installability check wants a >=192px icon in both groups.
+    assert {"192x192", "512x512"} <= by_purpose["any"]
+    assert {"192x192", "512x512"} <= by_purpose["maskable"]
+
+
+def test_every_manifest_icon_actually_serves():
+    body = client.get("/manifest.webmanifest").json()
+    for icon in body["icons"]:
+        r = client.get(icon["src"])
+        assert r.status_code == 200, icon["src"]
+        assert r.headers["content-type"] == "image/png"
+        assert r.content.startswith(b"\x89PNG\r\n\x1a\n"), icon["src"]
+
+
+def test_manifest_shortcuts_point_at_existing_modes():
+    body = client.get("/manifest.webmanifest").json()
+    urls = {s["url"] for s in body["shortcuts"]}
+    assert urls == {"/?mode=cartesian", "/?mode=polar"}
+    for url in urls:
+        assert client.get(url).status_code == 200
+
+
+def test_service_worker_is_root_scoped_and_revalidated():
+    r = client.get("/sw.js")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/javascript")
+    # no-cache: a fixed worker must never be pinned in the HTTP cache.
+    assert r.headers["cache-control"] == "no-cache"
+    assert r.headers["service-worker-allowed"] == "/"
+    # Sanity: it is the real worker, not an error page.
+    assert "SHELL_CACHE" in r.text and "addEventListener('fetch'" in r.text
+
+
+def test_service_worker_precache_list_is_servable():
+    """Every precached URL must be a 200 — one 404 would fail the install."""
+    sw = client.get("/sw.js").text
+    block = sw.split("const SHELL_URLS = [", 1)[1].split("];", 1)[0]
+    urls = re.findall(r"'([^']+)'", block)
+    assert "/" in urls
+    for url in urls:
+        assert client.get(url).status_code == 200, url
+
+
+def test_service_worker_never_caches_live_endpoints():
+    sw = client.get("/sw.js").text
+    # Live data (/api/hits, /metrics, /health) must stay network-only, i.e. no
+    # interception branch may exist for them — only /api/points is cached.
+    assert "url.pathname === '/api/points'" in sw
+    for path in ("/api/hits", "/metrics", "/health"):
+        assert f"url.pathname === '{path}'" not in sw, path
+        assert f"pathname.startsWith('{path}')" not in sw, path
+
+
+def test_icon_route_serves_whitelisted_pngs_and_rejects_the_rest():
+    assert client.get("/icons/icon-512.png").status_code == 200
+    assert client.get("/icons/apple-touch-icon-180.png").status_code == 200
+    assert client.get("/icons/icon-512.PNG").status_code == 404     # case-sensitive
+    assert client.get("/icons/nope.png").status_code == 404
+    assert client.get("/icons/index.html").status_code == 404
+    assert client.get("/icons/.env").status_code == 404
+
+
+def test_index_declares_pwa_metadata_and_registers_the_worker():
+    r = client.get("/")
+    assert r.status_code == 200
+    assert 'rel="manifest" href="/manifest.webmanifest"' in r.text
+    assert '<meta name="theme-color"' in r.text
+    assert 'rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png"' in r.text
+    assert "serviceWorker.register('/sw.js')" in r.text

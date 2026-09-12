@@ -55,6 +55,10 @@ FastAPI + Jinja2 + vanilla JS. The page plots from the server-side solver
 (`/api/points`) and falls back to a built-in client-side solver if the API is
 unreachable (e.g. opened as a plain file).
 
+It is also a **PWA**: installable from the browser (Add to Home screen / Install
+app), it opens in its own window and keeps working **offline** — see
+[Install as an app](#install-as-an-app-pwa).
+
 ## Run
 
 ```bash
@@ -66,6 +70,39 @@ python3 -m venv .venv
 
 Open http://127.0.0.1:8123
 
+## Install as an app (PWA)
+
+`xy.selviz.in` (and `http://127.0.0.1:8123`, which counts as a secure context)
+is installable: browser menu → **Install app** / **Add to Home screen**. It then
+opens in its own window with the graph on the launcher and in the task switcher.
+
+| File | Role |
+|---|---|
+| `static/manifest.webmanifest` | name/short name, `standalone`, theme colours, 192/512 icons in `any` **and** `maskable` variants, Cartesian/Polar shortcuts (`/?mode=polar`) |
+| `static/sw.js` | the service worker — app-shell precache, offline plotting |
+| `static/icons/*.png` | launcher, maskable and apple-touch icons (regenerate with `python3 scripts/make_icons.py`) |
+
+**Offline behaviour** — the shell (page, manifest, icons) is precached at
+install, so an offline reload still opens the app, and the case that matters:
+
+- a formula you plotted **online before** replots from the worker's bounded
+  runtime cache of `/api/points` (last 60 responses);
+- a formula you have **never** plotted offline is *not* a dead end — the worker
+  rejects the fetch and the page's built-in client-side solver takes over, so
+  the curve still draws (the points table then comes from that solver);
+- navigations are **network-first**: an online reload always gets the freshly
+  rendered page, so a deploy can never be masked by a stale cached shell.
+  `/api/hits`, `/metrics` and `/health` are network-only (live data);
+- the Google font is stale-while-revalidate, so the hand-drawn face survives
+  offline after one online visit.
+
+Bump `VERSION` in `static/sw.js` on any shell change (template, icons,
+manifest): the old caches are dropped on activate and the page reloads once via
+the `controllerchange` handler.
+
+> Not yet done: an in-app **Install** button and manifest `screenshots` (the
+> richer Android install sheet). Chrome/Safari's own menu entries already work.
+
 ## Endpoints
 
 | Endpoint | Description |
@@ -73,6 +110,9 @@ Open http://127.0.0.1:8123
 | `GET /` | Renders the graph page. The formula is a query param: `/?formula=x%20%2B%20y%20%3D%203`. The page keeps the URL in sync (`?formula=…`) as you plot, so links are shareable. `?mode=polar` opens the polar tab (default `cartesian`). The page footer shows a **hit counter** (`Hits: N` — page renders since the process started, refreshed from `/api/hits` every 30s). |
 | `GET /api/points?mode=…&formula=…&formula=…&x_min=…&x_max=…&x_step=…` | Solves one or more formulas (max 5, repeated `formula=` params) and returns the curves as JSON: `{"mode", "formulas", "x_range": {"min","max"}, "step", "curves": [{"formula", "display", "kind", "branches": [{"label","points": [{"x","y"}, …]}, …]}, …]}`. `mode` is `cartesian` (default) or `polar`. Linear formulas return one branch, quadratic-in-`y` two ("+", "−"), function formulas one per contiguous segment, implicit curves one per contour polyline. Inequality curves additionally carry `"inequality": {"op", "side"}` (side ∈ above/below/between/outside). Polar points also carry `theta` and `r` (`{"x","y","theta","r"}`) so the table can show θ/r. `x_min`/`x_max`/`x_step` (fractions allowed; step must be > 0 and ≤ 1000; both range bounds required together) override the default range and sampling — e.g. `x_step=0.1` for a smooth trig curve. In polar mode they bound θ; for implicit curves they size the sampling window. Responses are cached in-process for 60s (`X-Cache: HIT/MISS` header). Invalid formulas (or no real points) return `400` with a human-readable `detail`. |
 | `GET /api/hits` | Page hit count since process start: `{"hits": N}`. |
+| `GET /manifest.webmanifest` | Web app manifest (`application/manifest+json`, `Cache-Control: no-cache`) — what makes the page installable. |
+| `GET /sw.js` | The service worker, served from the origin root so its scope is `/` (`Service-Worker-Allowed: /`, `Cache-Control: no-cache`). |
+| `GET /icons/{name}` | PWA icons — whitelisted `*.png` names under `static/icons/` (anything else is a 404). |
 | `GET /metrics` | Prometheus-text counters: requests by method/path/status, durations, `/api/points` cache hits/misses, uptime. |
 | `GET /health` | Liveness probe: `{"status": "ok", "app": "xy-graph-gen", "version": …, "uptime_s": …}` |
 
@@ -142,10 +182,17 @@ Any linear equation, and simple polynomials in `x` (linear in `y`):
 
 ```
 app/
-  main.py        FastAPI app (/, /api/points, /api/hits, /metrics, /health)
+  main.py        FastAPI app (/, /api/points, /api/hits, /metrics, /health,
+                 + /manifest.webmanifest, /sw.js, /icons/{name})
   solver.py      server-side equation solver (pure Python, no deps)
 templates/
   index.html     the graph page (client solver kept as offline fallback)
+static/
+  manifest.webmanifest  PWA install metadata
+  sw.js                 service worker (shell precache, offline /api/points)
+  icons/                launcher / maskable / apple-touch PNGs
+scripts/
+  make_icons.py  regenerates static/icons/ (needs Pillow, run with system python3)
 test/
   test_solver.py pytest unit tests for the solver
   test_api.py    pytest API tests (TestClient)
@@ -204,6 +251,7 @@ P3 = bigger / probably not worth it.
 - [x] Formula history (localStorage ring buffer, shown as chips)
 - [ ] Points CSV export
 - [x] Dark mode / grid toggle
+- [x] Installable PWA: manifest + service worker + icon set (`static/`), opens standalone and keeps working offline — cached shell, cached `/api/points`, and the client solver for anything never plotted (`README` → Install as an app)
 
 ### P3 — bigger / probably not
 - [x] General implicit curves (grid sampling / contour rendering — different plotter)

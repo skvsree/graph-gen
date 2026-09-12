@@ -21,7 +21,7 @@ from . import solver
 
 log = logging.getLogger("xy-graph-gen")
 
-app = FastAPI(title="xy-graph-gen", version="0.8.0")
+app = FastAPI(title="xy-graph-gen", version="0.8.1")
 
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 

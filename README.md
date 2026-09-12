@@ -18,8 +18,8 @@ so `tan` and reciprocal functions render cleanly.
 The graph is interactive: **drag to pan, scroll or pinch to zoom, double-click
 to reset**. The action bar next to the plot button is **icon-only** — labels
 live in the tooltips and accessible names: ▶ Plot, ＋ add formula, ⤓ download
-PNG, ↗ **share image** (the OS share sheet on a phone, the image clipboard on
-desktop, and a plain download as the last resort), 🔗 copy link, and three view
+PNG, ↗ **share image** (the OS share sheet with the picture, falling back to a
+link share, the image clipboard, then a plain download), 🔗 copy link, and three view
 toggles — theme (dark/light, persisted),
 **Grid** (grid lines) and **Axis** (the axis lines, their arrowheads, the tick
 numbers and the `x`/`y` labels), each showing its state as an accented icon, so
@@ -108,11 +108,16 @@ manifest, screenshots): the old caches are dropped on activate and the page
 reloads once via the `controllerchange` handler.
 
 **Sharing a graph** — three buttons, three jobs: ⤓ downloads the PNG, ↗ opens
-the OS share sheet with the image file (Web Share Level 2; falls back to the
-image clipboard on desktop Chromium, then to a download), and 🔗 copies the
-shareable URL. Every confirmation is a **✓ tick flashed inside the icon-only
-button** (`flashButton`) — never by writing to `textContent`, which used to
-blank the button's SVG.
+the OS share sheet with the image (Web Share Level 2), and 🔗 copies the
+shareable URL. The ↗ ladder is **image + link → link only → image clipboard →
+download**: a phone whose browser can't attach a file (or has `share` without
+`canShare`) still gets a share sheet, just with the link. The PNG is encoded
+**eagerly** after every repaint (`markPngDirty` → `freshPngFile`), because
+`navigator.share()` needs *transient user activation* — encoding inside the
+click (`toBlob` callback) loses it, which is exactly why the sheet used to
+never appear on phones. Feedback is a **✓ tick flashed inside the icon-only
+button** plus a **bottom toast** (tooltips don't exist on touch) — never by
+writing to `textContent`, which used to blank the button's SVG.
 
 > The install sheet uses the wide + narrow screenshots above; nothing else is
 > required for installability.

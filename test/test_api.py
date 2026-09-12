@@ -547,7 +547,7 @@ def test_health_reports_version_and_uptime():
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert body["version"] == "0.8.0"
+    assert body["version"] == "0.8.1"
     assert body["uptime_s"] >= 0
 
 
@@ -813,3 +813,28 @@ def test_index_has_share_and_install_controls():
     # button; the tick flash must keep the SVG.
     assert "function flashButton" in text and "ICON.check" in text
     assert "btn.textContent = 'Copied!'" not in text
+
+
+def test_share_uses_a_pre_encoded_png_synchronously():
+    """navigator.share() needs transient activation: the tap must not wait for
+    an encode, so the PNG is cached after every repaint."""
+    text = client.get("/").text
+    assert "function markPngDirty" in text
+    assert "function freshPngFile" in text
+    assert "markPngDirty();" in text                      # wired into draw()
+    assert "setTimeout(encodePngFile, 400)" in text        # debounced re-encode
+    assert "function shareLinkOnly" in text                # link-only fallback
+    # shareImage() must reach navigator.share with no await in between.
+    share_fn = text.split("function shareImage()", 1)[1].split("function shareLinkOnly", 1)[0]
+    assert "navigator.share(payload)" in share_fn
+    assert "graphPngBlob" not in share_fn and "await" not in share_fn
+    # Files unsupported/no image yet -> the link share still opens the sheet.
+    assert "navigator.share({ title: title, text: text, url: location.href })" in text
+
+
+def test_actions_also_report_to_a_toast():
+    """Tooltips are invisible on touch, so flashButton mirrors its label."""
+    text = client.get("/").text
+    assert 'id="toast"' in text and "function toast" in text
+    flash = text.split("function flashButton(btn, label)", 1)[1].split("function toast", 1)[0]
+    assert "toast(label)" in flash

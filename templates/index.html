@@ -171,6 +171,14 @@
     background: var(--card); border: 1px solid var(--border); border-radius: 8px;
   }
   .install-hint strong { color: var(--fg); }
+  /* Touch has no hover, so the icon buttons' tooltips are invisible there:
+     every action also reports itself in a small bottom toast. */
+  .toast {
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+    background: var(--card); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 9px 14px; font-size: 13.5px; z-index: 60;
+    box-shadow: 0 6px 20px rgba(15, 23, 42, 0.18); max-width: 90vw; text-align: center;
+  }
   .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
   .chip {
     font-family: ui-monospace, Consolas, monospace; font-size: 13px;
@@ -315,6 +323,7 @@
     </button>
   </form>
   <p id="installHint" class="install-hint" hidden></p>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <div class="pal-pop" id="palPop" hidden>
     <div class="pal-grid" id="palGrid" role="listbox" aria-label="Colour palette"></div>
@@ -1420,6 +1429,7 @@ function palette() { return currentTheme() === 'dark' ? PALETTES.dark : PALETTES
 function redraw() { if (lastCurves) draw(lastCurves); }
 
 function draw(curves) {
+  markPngDirty();   // keep the ready-to-share PNG in step with the canvas
   const cv = document.getElementById('graph');
   const ctx = cv.getContext('2d');
   const W = cv.width, H = cv.height;
@@ -2302,6 +2312,8 @@ function exportPng() {
 // Transient confirmation inside an ICON-ONLY button: swap the glyph for a tick
 // and repoint the tooltip. (The old copy feedback wrote to `textContent`, which
 // in an icon-only button replaced the SVG — and "restored" an empty button.)
+// The same text also goes to the bottom toast, because a tooltip is invisible
+// on a touch device.
 function flashButton(btn, label) {
   if (!btn) return;
   if (!btn.__flashHtml) btn.__flashHtml = btn.innerHTML;
@@ -2311,6 +2323,7 @@ function flashButton(btn, label) {
   btn.classList.add('flash-ok');
   btn.setAttribute('title', label);
   btn.setAttribute('aria-label', label);
+  toast(label);
   clearTimeout(btn.__flashTimer);
   btn.__flashTimer = setTimeout(function () {
     btn.innerHTML = btn.__flashHtml;
@@ -2318,6 +2331,15 @@ function flashButton(btn, label) {
     btn.setAttribute('title', prevTitle);
     btn.setAttribute('aria-label', prevLabel);
   }, 1600);
+}
+
+function toast(msg) {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout(el.__toastTimer);
+  el.__toastTimer = setTimeout(function () { el.hidden = true; }, 2600);
 }
 
 function copyLink() {
@@ -2339,11 +2361,11 @@ function copyLink() {
   }
 }
 
-// Share the graph IMAGE. Three routes, best first:
-//   1. the OS share sheet (Web Share Level 2 with a File) — phones get
-//      WhatsApp/Mail/etc. directly;
-//   2. the image clipboard (desktop Chromium) — paste straight into a chat;
-//   3. download the PNG (the same file the ⤓ button produces).
+// Share the graph IMAGE. The PNG is encoded EAGERLY (below), because
+// `navigator.share()` must be called synchronously inside the tap: it needs
+// transient user activation, and an async `toBlob` callback loses it — on iOS
+// Safari and slow phones that silently degraded to the clipboard, so the share
+// sheet never appeared.
 function graphPngBlob(cb) {
   const cv = document.getElementById('graph');
   if (cv.toBlob) {
@@ -2354,34 +2376,100 @@ function graphPngBlob(cb) {
   cb(null);
 }
 
-function shareImage() {
-  const btn = document.getElementById('shareBtn');
-  const url = location.href;
+// --- ready-to-share PNG ----------------------------------------------------
+// Re-encoded (debounced) every time the canvas is repainted, so a tap has a
+// File in hand and never has to wait for an encode.
+let pngFile = null;
+let pngFileDirty = true;
+let pngFileTimer = 0;
+
+function markPngDirty() {
+  pngFileDirty = true;
+  clearTimeout(pngFileTimer);
+  pngFileTimer = setTimeout(encodePngFile, 400);
+}
+
+function encodePngFile() {
   graphPngBlob(function (blob) {
-    if (!blob) { exportPng(); flashButton(btn, 'Image downloaded'); return; }
-    let file = null;
+    if (!blob) { pngFile = null; return; }
     try {
-      file = new File([blob], 'xy-graph.png', { type: 'image/png' });
-    } catch (e) { file = null; }
-    if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
-      navigator.share({ files: [file], title: 'xy-graph-gen', text: 'Plotted with xy-graph-gen: ' + url })
-        .then(function () { flashButton(btn, 'Image shared'); })
-        .catch(function (err) {
-          // A cancelled share sheet is not an error worth a second attempt.
-          if (err && err.name === 'AbortError') return;
-          copyImage(blob, btn);
-        });
-      return;
+      pngFile = new File([blob], 'xy-graph.png', { type: 'image/png' });
+      pngFileDirty = false;
+    } catch (e) {
+      pngFile = null;   // no File constructor: stay on the async path
     }
-    copyImage(blob, btn);
   });
 }
 
-function copyImage(blob, btn) {
-  if (navigator.clipboard && window.ClipboardItem && window.isSecureContext) {
-    navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
-      .then(function () { flashButton(btn, 'Image copied — paste it anywhere'); })
-      .catch(function () { exportPng(); flashButton(btn, 'Image downloaded'); });
+function freshPngFile() {
+  return (!pngFileDirty && pngFile && pngFile.size) ? pngFile : null;
+}
+
+function shareImage() {
+  const btn = document.getElementById('shareBtn');
+  const title = 'xy-graph-gen';
+  const text = 'Plotted with xy-graph-gen: ' + location.href;
+  const file = freshPngFile();
+
+  // 1. Image + link through the OS share sheet. Called SYNCHRONOUSLY so the
+  //    tap's activation is still valid.
+  if (file && navigator.share) {
+    const payload = { files: [file], title: title, text: text };
+    if (typeof navigator.canShare !== 'function' || navigator.canShare(payload)) {
+      try {
+        navigator.share(payload).then(
+          function () { flashButton(btn, 'Image shared'); },
+          function (err) {
+            // A cancelled sheet is not an error worth another sheet.
+            if (err && err.name === 'AbortError') return;
+            shareLinkOnly(btn, title, text, file);
+          });
+        return;
+      } catch (e) {
+        // Synchronous TypeError: `files` not supported by this browser.
+      }
+    }
+  }
+  shareLinkOnly(btn, title, text, file);
+}
+
+// 2. Nothing to attach an image to (or no image yet): share the LINK, which
+//    every Web-Share-capable phone can do, so the sheet still opens.
+function shareLinkOnly(btn, title, text, file) {
+  if (navigator.share) {
+    try {
+      navigator.share({ title: title, text: text, url: location.href }).then(
+        function () { flashButton(btn, 'Link shared'); },
+        function (err) {
+          if (err && err.name === 'AbortError') return;
+          copyImage(file, btn);
+        });
+      return;
+    } catch (e) { /* fall through */ }
+  }
+  copyImage(file, btn);
+}
+
+// 3. Clipboard image, 4. a plain download.
+function copyImage(file, btn) {
+  if (file && navigator.clipboard && window.ClipboardItem && window.isSecureContext) {
+    navigator.clipboard.write([new ClipboardItem({ 'image/png': file })]).then(
+      function () { flashButton(btn, 'Image copied — paste it anywhere'); },
+      function () { exportPng(); flashButton(btn, 'Image downloaded'); });
+    return;
+  }
+  // No cached image: encode, then fall back to the clipboard path.
+  if (!file) {
+    graphPngBlob(function (blob) {
+      if (blob && navigator.clipboard && window.ClipboardItem && window.isSecureContext) {
+        navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).then(
+          function () { flashButton(btn, 'Image copied — paste it anywhere'); },
+          function () { exportPng(); flashButton(btn, 'Image downloaded'); });
+        return;
+      }
+      exportPng();
+      flashButton(btn, 'Image downloaded');
+    });
     return;
   }
   exportPng();

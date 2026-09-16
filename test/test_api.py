@@ -441,6 +441,42 @@ def test_index_renders_pen_menu_per_formula():
         assert f">{label}</option>" in r.text, label
 
 
+def test_template_pen_and_style_menus_stay_one_styled_pair():
+    # The pen menu once shipped with NO css of its own: it rendered as a raw UA
+    # select (19px tall, Arial, square, grey, `appearance: auto`) beside the
+    # themed style menu, and the row's wrap then left it alone at the end of one
+    # line with its partner starting the next. Both are now styled by ONE rule
+    # (so they cannot drift apart) and wrapped in ONE `.penstyle` group.
+    r = client.get("/", params=[("formula", "y = x"), ("formula", "y = 2x")])
+    assert r.status_code == 200
+    css = r.text.split("</style>")[0]
+
+    # ONE shared declaration block for the two menus ...
+    m = re.search(r"\.form select\.pen-pick,\s*\.form select\.style-pick \{([^}]*)\}", css)
+    assert m is not None, "pen + style menus must share one css rule"
+    block = m.group(1)
+    # ... and no rule may style just one of them (that is how they diverged).
+    for m in re.finditer(r"([^{}]+)\{", css):
+        sel = m.group(1)
+        if "select" in sel and ("pen-pick" in sel or "style-pick" in sel):
+            assert ".pen-pick" in sel and ".style-pick" in sel, f"unpaired select rule: {sel}"
+
+    # Room for the longest label ("Calligraphy") inside the padded box.
+    wm = re.search(r"width: (\d+)px", block)
+    assert wm is not None, "the shared select rule must pin an explicit width"
+    width = int(wm.group(1))
+    assert width - 12 - 2 >= 60, f"select width {width}px is too tight for its labels"
+
+    # Both menus carry the same micro-label treatment (no shouting "PEN").
+    assert ".pen-ctr .ctr-lbl, .style-ctr .ctr-lbl" in css
+
+    # ONE group per row, pen then style, so a wrapping row cannot split them —
+    # and the JS-built rows (add / duplicate) carry the same group.
+    assert r.text.count('class="penstyle"') == 2
+    assert re.findall(r'class="ctr (pen|style)-ctr"', r.text) == ["pen", "style", "pen", "style"]
+    assert re.search(r"className = 'penstyle'", r.text), "JS-added rows need the group too"
+
+
 def test_index_prefills_pen_params_in_order():
     r = client.get(
         "/", params=[("formula", "y = x"), ("formula", "y = 2x"),

@@ -43,9 +43,12 @@ memorised or spelled from memory; the inserted text goes in exactly where the
 caret was, so `y = 2*` + `sqrt(` becomes `y = 2*sqrt(` ready for its argument.
 Each row also has **line opacity** (a percent field, 0–100, default 100),
 **line thickness** (`px`, 0.5–12, default 2.5), a **pen** menu (Technical,
-Pencil, Marker, Calligraphy, Highlighter) and a **line style** menu (solid,
-dashed, dotted, dash-dot, long dash — the dash pattern scales with the
-thickness, so a 8px dashed line stays dashed instead of turning into dots) and two
+Pencil, Marker, Calligraphy, Highlighter) beside its **line style** menu
+(solid, dashed, dotted, dash-dot, long dash — the dash pattern scales with the
+thickness, so an 8px dashed line stays dashed instead of turning into dots).
+The pen and style menus sit in one group, so a narrow row wraps them together
+instead of splitting the pair across two lines, and a single shared style rule
+keeps both looking identical. Each row also carries two
 presentation transforms: its own **centre**
 (x/y, default 0,0 — the point on the graph where that curve's own (0,0) sits)
 and its own **rotation** (∠, degrees about that centre, default 0, positive =

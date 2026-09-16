@@ -71,14 +71,24 @@
   .ctr-axis { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; }
   .ctr-lbl { font-size: 10.5px; line-height: 1; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
   .ctr input[type=number] { width: 64px; padding: 8px 6px; text-align: center; }
-  /* Per-row style (line style) menu. */
-  .form select.style-pick {
-    width: 96px; padding: 8px 6px; font-size: 13px; font-family: inherit;
+  /* The pen + style menus are ONE pair: a single wrapper keeps them side by side
+     when a narrow row wraps (the pen menu used to end up alone at the end of the
+     line, its partner starting the next one), and ONE shared rule styles both —
+     the pen select shipped with no CSS of its own and rendered as a raw UA
+     select (19px tall, Arial, square, grey, `appearance: auto`) sitting next to
+     this themed menu. Never style one of the two alone. */
+  .penstyle { display: inline-flex; align-items: flex-end; gap: 8px; flex: none; }
+  .form select.pen-pick, .form select.style-pick {
+    width: 112px; padding: 8px 6px; font-size: 13px; font-family: inherit;
     border: 1px solid var(--border); border-radius: 8px; background: var(--card);
     color: var(--fg); cursor: pointer;
   }
-  .form select.style-pick:focus { outline: 2px solid var(--input-focus); border-color: #2563eb; }
-  .style-ctr .ctr-lbl { text-transform: none; font-size: 11px; }
+  .form select.pen-pick:focus, .form select.style-pick:focus {
+    outline: 2px solid var(--input-focus); border-color: #2563eb;
+  }
+  /* Both menus carry the micro-label the same way (the pen one was rendering
+     as a shouting uppercase "PEN" next to a lowercase "style"). */
+  .pen-ctr .ctr-lbl, .style-ctr .ctr-lbl { text-transform: none; font-size: 11px; }
   /* Per-formula rotation (degrees about the curve's own centre, default 0). */
   .rot-ctr .ctr-lbl { font-size: 13px; text-transform: none; }
   .ctr input[type=number]::-webkit-inner-spin-button { opacity: 0.4; }
@@ -313,20 +323,22 @@
         </span>
         {% set sel = styles[loop.index0] %}
         {% set selPen = pens[loop.index0] %}
-        <span class="ctr pen-ctr" title="This formula's pen — calligraphy has a chisel tip (thin on diagonals, thick across), marker and highlighter are translucent felt/flat tips, pencil is grainy">
-          <span class="ctr-axis">
-            <label class="ctr-lbl" for="pen{{ loop.index0 }}">pen</label>
-            <select class="pen-pick" id="pen{{ loop.index0 }}">
-              {% for value, label in pen_options %}<option value="{{ value }}"{% if value == selPen %} selected{% endif %}>{{ label }}</option>{% endfor %}
-            </select>
+        <span class="penstyle">
+          <span class="ctr pen-ctr" title="This formula's pen — calligraphy has a chisel tip (thin on diagonals, thick across), marker and highlighter are translucent felt/flat tips, pencil is grainy">
+            <span class="ctr-axis">
+              <label class="ctr-lbl" for="pen{{ loop.index0 }}">pen</label>
+              <select class="pen-pick" id="pen{{ loop.index0 }}">
+                {% for value, label in pen_options %}<option value="{{ value }}"{% if value == selPen %} selected{% endif %}>{{ label }}</option>{% endfor %}
+              </select>
+            </span>
           </span>
-        </span>
-        <span class="ctr style-ctr" title="This formula's line style — how the stroke is broken up: solid, dashed, dotted, dash-dot or long dash (calligraphy pens draw their own chisel marks, so this is disabled there)">
-          <span class="ctr-axis">
-            <label class="ctr-lbl" for="style{{ loop.index0 }}">style</label>
-            <select class="style-pick" id="style{{ loop.index0 }}"{% if selPen == 'calligraphy' %} disabled{% endif %}>
-              {% for value, label in style_options %}<option value="{{ value }}"{% if value == sel %} selected{% endif %}>{{ label }}</option>{% endfor %}
-            </select>
+          <span class="ctr style-ctr" title="This formula's line style — how the stroke is broken up: solid, dashed, dotted, dash-dot or long dash (calligraphy pens draw their own chisel marks, so this is disabled there)">
+            <span class="ctr-axis">
+              <label class="ctr-lbl" for="style{{ loop.index0 }}">style</label>
+              <select class="style-pick" id="style{{ loop.index0 }}"{% if selPen == 'calligraphy' %} disabled{% endif %}>
+                {% for value, label in style_options %}<option value="{{ value }}"{% if value == sel %} selected{% endif %}>{{ label }}</option>{% endfor %}
+              </select>
+            </span>
           </span>
         </span>
         <span class="ctr" title="This formula's own centre (default 0,0) — the point on the graph where its (0,0) sits; every point of the curve is shifted by this offset">
@@ -2782,6 +2794,12 @@ function addFormulaRow(value) {
   brAxis.appendChild(brLbl);
   brAxis.appendChild(brSel);
   brWrap.appendChild(brAxis);
+  // The pen + style menus travel as ONE `.penstyle` group, exactly like the
+  // server-rendered markup — a wrapping row must never split the pair.
+  const penStyle = document.createElement('span');
+  penStyle.className = 'penstyle';
+  penStyle.appendChild(penWrap);
+  penStyle.appendChild(brWrap);
   // Centre offset fields (default 0,0) — where this curve's own (0,0) sits.
   const ctr = document.createElement('span');
   ctr.className = 'ctr';
@@ -2846,8 +2864,7 @@ function addFormulaRow(value) {
   row.appendChild(cell);
   row.appendChild(opWrap);
   row.appendChild(wWrap);
-  row.appendChild(penWrap);
-  row.appendChild(brWrap);
+  row.appendChild(penStyle);
   row.appendChild(ctr);
   row.appendChild(rot);
   row.appendChild(dup);

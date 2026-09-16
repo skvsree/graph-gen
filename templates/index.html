@@ -78,29 +78,38 @@
     width: 14px; height: 14px; border-radius: 50%; flex: none;
     background: var(--border); border: 1px solid var(--muted);
   }
-  .formula-row .color-pick {
-    width: 40px; height: 34px; padding: 1px; flex: none; cursor: pointer;
+  .formula-row .color-pick, .formula-row .color2-pick {
+    width: 36px; height: 34px; padding: 1px; flex: none; cursor: pointer;
     border: 1px solid var(--border); border-radius: 6px; background: var(--card);
   }
   .formula-row .color-pick::-webkit-color-swatch-wrapper { padding: 2px; }
   .formula-row .color-pick::-webkit-color-swatch { border: none; border-radius: 4px; }
   .formula-row .color-pick::-moz-color-swatch { border: none; border-radius: 4px; }
-  /* Colour cell: device swatch + a hex/text box (any CSS colour — the Android
-     device dialog only offers a small fixed palette) + a palette popover. */
-  .color-cell { display: inline-flex; align-items: center; gap: 4px; flex: none; }
-  .form input.hex-pick {
-    width: 100px; padding: 8px 6px; font-size: 13px; text-align: center;
-    text-transform: lowercase;
+  .formula-row .color2-pick::-webkit-color-swatch-wrapper { padding: 2px; }
+  .formula-row .color2-pick::-webkit-color-swatch { border: none; border-radius: 4px; }
+  .formula-row .color2-pick::-moz-color-swatch { border: none; border-radius: 4px; }
+  /* Colour cell: TWO colour parts (gradient start → end), each a device
+     swatch + hex/text box (any CSS colour — the Android device dialog only
+     offers a small fixed palette) + a palette popover. They wrap internally on
+     very narrow screens so the row never overflows. */
+  .color-cell { display: inline-flex; align-items: center; gap: 4px; flex: none; flex-wrap: wrap; }
+  .color-part { display: inline-flex; align-items: center; gap: 4px; }
+  .color-arrow { color: var(--muted); font-size: 13px; line-height: 1; padding: 0 1px; }
+  /* The generic `.form input[type=text]` rule sets flex:1 + min-width:240px —
+     far too wide for two boxes inside one colour cell, so both are pinned. */
+  .form input.hex-pick, .form input.hex2-pick {
+    width: 88px; min-width: 0; flex: none; padding: 8px 6px; font-size: 13px;
+    text-align: center; text-transform: lowercase;
   }
-  .form input.hex-pick.bad { border-color: var(--error-fg); background: var(--error-bg); }
+  .form input.hex-pick.bad, .form input.hex2-pick.bad { border-color: var(--error-fg); background: var(--error-bg); }
   /* Scoped to .form so it outranks `.form button` (otherwise the generic blue
      button background wins and the quiet swatch-arrow/remove styles never apply). */
-  .form .pal-btn {
+  .form .pal-btn, .form .pal2-btn {
     border: 1px solid var(--border); background: var(--card); color: var(--fg-soft);
     border-radius: 6px; padding: 9px 5px; font-size: 11px; line-height: 1;
     cursor: pointer; font-family: inherit;
   }
-  .form .pal-btn:hover { background: var(--hover); }
+  .form .pal-btn:hover, .form .pal2-btn:hover { background: var(--hover); }
   /* Palette popover: one shared element, positioned next to the button that
      opened it (fixed, so a wrapped row can't clip it). */
   .pal-pop {
@@ -116,6 +125,27 @@
   }
   .pal-sw:hover { outline: 2px solid var(--input-focus); }
   .pal-sw.on { border: 2px solid var(--fg); }
+  /* Per-row ƒ button: opens the shared function menu for that row's formula
+     input. Scoped to .form so it outranks the generic `.form button` blue
+     (same specificity trap as .pal-btn). */
+  .form .fn-btn {
+    border: 1px solid var(--border); background: var(--card); color: var(--fg-soft);
+    border-radius: 6px; padding: 8px 9px; font-size: 15px; line-height: 1;
+    font-style: italic; font-family: inherit; cursor: pointer; flex: none;
+  }
+  .form .fn-btn:hover { background: var(--hover); }
+  .form .fn-btn.on { border-color: #2563eb; color: var(--accent); }
+  /* Function menu — shares .pal-pop for its panel chrome (fixed, shadowed). */
+  .fn-pop { max-width: 92vw; }
+  .fn-hint { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; margin: 2px 2px 6px; }
+  .fn-hint-2 { margin-top: 10px; }
+  .fn-group { display: flex; flex-wrap: wrap; gap: 5px; max-width: 384px; }
+  .fn-sw {
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12.5px;
+    padding: 5px 8px; border-radius: 6px; cursor: pointer; font-style: normal;
+    border: 1px solid var(--border); background: var(--card); color: var(--fg);
+  }
+  .fn-sw:hover { background: var(--hover); outline: 2px solid var(--input-focus); }
   /* Per-row icon buttons (duplicate / remove) — quiet until hovered. */
   .form .row-del, .form .row-dup {
     border: none; background: none; cursor: pointer; line-height: 1;
@@ -233,7 +263,7 @@
 <div class="wrap">
   <header>
     <h1>xy-graph-gen</h1>
-    <p>Enter an equation in x and y — it is solved for y and plotted for x = 1 … 100, with (0,0) at the centre of the graph. Functions: <code>sin cos tan log sqrt exp abs</code> (+ <code>e</code>, <code>pi</code>). Drag to pan, scroll or pinch to zoom, double-click to reset.</p>
+    <p>Enter an equation in x and y — it is solved for y and plotted for x = 1 … 100, with (0,0) at the centre of the graph. Functions: <code>sin cos tan asin acos atan atan2(y,x) sinh cosh tanh log ln log10 log2 sqrt cbrt exp abs floor ceil round sign</code> (+ <code>e</code>, <code>pi</code>). Each row takes two colours — the line fades from the first into the second. Drag to pan, scroll or pinch to zoom, double-click to reset.</p>
   </header>
 
   <div class="tabs" id="tabs">
@@ -247,10 +277,19 @@
       {% for f in formulas %}
       <div class="formula-row">
         <input type="text" class="formula-input" value="{{ f }}" spellcheck="false" autocomplete="off" placeholder="e.g. y = {{ 'sin(x)' if loop.first else 'cos(x)' }}"{% if loop.first %} id="formula"{% endif %}>
+        <button type="button" class="fn-btn" title="Insert a supported function at the cursor" aria-label="Insert a supported function at the cursor" aria-haspopup="menu" aria-expanded="false">&#402;</button>
         <span class="color-cell">
-          <input type="color" class="color-pick" value="{{ colors[loop.index0] }}" title="Device colour picker — on Android this is a small fixed palette, so use the box beside it for any colour">
-          <input type="text" class="hex-pick" value="{{ colors[loop.index0] }}" spellcheck="false" autocomplete="off" maxlength="24" title="Any opaque CSS colour — #rgb, #rrggbb, rgb(…), hsl(…) or a name like tomato; press Enter to apply (use the % field for transparency)" aria-label="Line colour as an opaque CSS colour value">
-          <button type="button" class="pal-btn" title="Pick from the colour palette" aria-label="Open the colour palette">&#9662;</button>
+          <span class="color-part" data-ch="a">
+            <input type="color" class="color-pick" value="{{ colors[loop.index0] }}" title="Device colour picker — on Android this is a small fixed palette, so use the box beside it for any colour">
+            <input type="text" class="hex-pick" value="{{ colors[loop.index0] }}" spellcheck="false" autocomplete="off" maxlength="24" title="Any opaque CSS colour — #rgb, #rrggbb, rgb(…), hsl(…) or a name like tomato; press Enter to apply (use the % field for transparency)" aria-label="Line colour as an opaque CSS colour value">
+            <button type="button" class="pal-btn" data-ch="a" title="Pick from the colour palette" aria-label="Open the colour palette">&#9662;</button>
+          </span>
+          <span class="color-arrow" title="Gradient: the line fades from the first colour into the second one along the curve (identical colours = a solid line)" aria-hidden="true">&#8594;</span>
+          <span class="color-part" data-ch="b">
+            <input type="color" class="color2-pick" value="{{ colors2[loop.index0] }}" title="Gradient end colour — the line fades from the first colour into this one along the curve; leave it equal to the first colour for a solid line. On Android use the box beside it for any colour">
+            <input type="text" class="hex2-pick" value="{{ colors2[loop.index0] }}" spellcheck="false" autocomplete="off" maxlength="24" title="Gradient end colour as any opaque CSS colour — #rgb, #rrggbb, rgb(…), hsl(…) or a name like tomato; press Enter to apply" aria-label="Gradient end colour as an opaque CSS colour value">
+            <button type="button" class="pal2-btn" data-ch="b" title="Pick the gradient end colour from the palette" aria-label="Open the colour palette for the gradient end colour">&#9662;</button>
+          </span>
         </span>
         <span class="ctr op-ctr" title="This formula's line opacity in percent of its colour (0–100, default 100 = fully opaque)">
           <span class="ctr-axis">
@@ -327,6 +366,16 @@
 
   <div class="pal-pop" id="palPop" hidden>
     <div class="pal-grid" id="palGrid" role="listbox" aria-label="Colour palette"></div>
+  </div>
+
+  <!-- Function menu: ONE shared panel, filled from FUNCTIONS by buildFunctionMenu().
+       A click inserts the function (with its "(" ) at the caret of the row's
+       formula input. -->
+  <div class="pal-pop fn-pop" id="fnPop" hidden>
+    <div class="fn-hint">Insert at the cursor</div>
+    <div class="fn-group" id="fnGrid" role="listbox" aria-label="Supported functions"></div>
+    <div class="fn-hint fn-hint-2">Constants</div>
+    <div class="fn-group" id="fnConsts" role="listbox" aria-label="Supported constants"></div>
   </div>
 
   <details class="accordion" id="samplesAccordion">
@@ -476,11 +525,17 @@ function polyStr(poly) {
 /* ================= expression path: functions, parens, e/pi =================
    Mirror of app/solver.py's expression solver. AST nodes:
    {t:'num',v} {t:'sym',n} {t:'x'} {t:'y'} {t:'neg',a} {t:'f',n,a}
-   {t:'b',op,l,r} {t:'pow',l,r}.                                      */
+   {t:'f2',n,a,b} (two-argument call, atan2) {t:'b',op,l,r} {t:'pow',l,r}. */
 
-const FUNCTIONS = ['sin', 'cos', 'tan', 'log', 'ln', 'sqrt', 'exp', 'abs'];
+const FUNCTIONS = ['sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'sinh', 'cosh', 'tanh',
+                   'log', 'ln', 'log10', 'log2', 'sqrt', 'cbrt', 'exp', 'abs',
+                   'floor', 'ceil', 'round', 'sign'];
 const KNOWN_NAMES = new Set([...FUNCTIONS, 'pi', 'theta', 'e']);
-const FUNC_RE = /[()]|(?:sin|cos|tan|log|ln|sqrt|exp|abs)\(|(?<![a-zA-Z])e(?![a-zA-Z])|pi/;
+// Two-argument call — atan2(y, x) only (mirrors TWO_ARG_FUNCTIONS in app/solver.py).
+const TWO_ARG_FUNCTIONS = ['atan2'];
+// Built from FUNCTIONS so the detector can never drift from the list. Order is
+// irrelevant here: every alternative must be followed by "(".
+const FUNC_RE = new RegExp('[()]|(?:' + FUNCTIONS.join('|') + ')\\(|(?<![a-zA-Z])e(?![a-zA-Z])|pi');
 const FUNCTION_Y_LIMIT = 1e6;
 const INEQ_RE = />=|<=|>|</;
 // Implicit-curve constants (mirror app/solver.py)
@@ -514,7 +569,14 @@ function exprTokenize(s) {
     if (/[a-zA-Z\u03b8]/.test(c)) {
       let j = i;
       while (j < s.length && /[a-zA-Z\u03b8]/.test(s[j])) j++;
-      const name = s.slice(i, j);
+      let name = s.slice(i, j);
+      // Names that carry a digit (log10, log2, atan2) span an alphanumeric
+      // run, so swallow the digits after the letters when the whole run is a
+      // known name — "log10(2)" must not read as log * 10 * (2). "x2" keeps
+      // its old meaning (x * 2) because "x2" is not a known name.
+      let k = j;
+      while (k < s.length && /[0-9]/.test(s[k])) k++;
+      if (KNOWN_NAMES.has(s.slice(i, k))) { name = s.slice(i, k); j = k; }
       if (!KNOWN_NAMES.has(name) && name.split('').every(ch => ch === 'x' || ch === 'y')) {
         // "xy" -> x*y, "xx" -> x*x (implicit multiplication of single-letter
         // variables); multi-letter names that are not functions/constants
@@ -526,7 +588,7 @@ function exprTokenize(s) {
       i = j;
       continue;
     }
-    if ('+-*/^()'.indexOf(c) !== -1) { tokens.push({ t: 'op', o: c }); i++; continue; }
+    if ('+-*/^(),'.indexOf(c) !== -1) { tokens.push({ t: 'op', o: c }); i++; continue; }
     return { error: 'Cannot understand character "' + c + '".' };
   }
   const out = [];
@@ -592,11 +654,27 @@ function parseExprTokens(tokens, polar) {
       const nx = peek();
       if (nx && nx.t === 'op' && nx.o === '(') {
         next();
-        const inner = expr();
-        const close = next();
-        if (!close || close.t !== 'op' || close.o !== ')') throw new Error('Missing closing parenthesis.');
         const name = t.n === 'ln' ? 'log' : t.n;
         if (FUNCTIONS.indexOf(name) === -1) throw new Error("Unknown function '" + t.n + "'.");
+        const inner = expr();
+        if (TWO_ARG_FUNCTIONS.indexOf(name) !== -1) {
+          // atan2(y, x) — the only two-argument function today.
+          const sep = peek();
+          if (!sep || sep.t !== 'op' || sep.o !== ',') {
+            throw new Error("Function '" + t.n + "' takes two arguments.");
+          }
+          next();
+          const second = expr();
+          const close2 = next();
+          if (!close2 || close2.t !== 'op' || close2.o !== ')') throw new Error('Missing closing parenthesis.');
+          return { t: 'f2', n: name, a: inner, b: second };
+        }
+        const comma = peek();
+        if (comma && comma.t === 'op' && comma.o === ',') {
+          throw new Error("Function '" + t.n + "' takes one argument.");
+        }
+        const close = next();
+        if (!close || close.t !== 'op' || close.o !== ')') throw new Error('Missing closing parenthesis.');
         return { t: 'f', n: name, a: inner };
       }
       if (t.n === 'e' || t.n === 'pi') return { t: 'sym', n: t.n };
@@ -638,6 +716,11 @@ function linearize(node) {
       const r = linearize(node.a);
       if (r.a) throw new Error("Cannot solve — 'y' appears inside a function.");
       return { a: null, b: { t: 'f', n: node.n, a: r.b } };
+    }
+    case 'f2': {   // atan2(y, x): y inside EITHER argument is unsolvable here
+      const r1 = linearize(node.a), r2 = linearize(node.b);
+      if (r1.a || r2.a) throw new Error("Cannot solve — 'y' appears inside a function.");
+      return { a: null, b: { t: 'f2', n: node.n, a: r1.b, b: r2.b } };
     }
     case 'pow': {
       const al = linearize(node.l), ar = linearize(node.r);
@@ -689,6 +772,7 @@ function simplify(node) {
       return { t: 'neg', a: c };
     }
     case 'f': return { t: 'f', n: node.n, a: simplify(node.a) };
+    case 'f2': return { t: 'f2', n: node.n, a: simplify(node.a), b: simplify(node.b) };
     case 'pow': {
       const l = simplify(node.l), r = simplify(node.r);
       if (l.t === 'num' && r.t === 'num') {
@@ -746,7 +830,7 @@ function simplify(node) {
 
 function prec(node) {
   switch (node.t) {
-    case 'num': case 'sym': case 'x': case 'y': case 'theta': case 'f': return 4;
+    case 'num': case 'sym': case 'x': case 'y': case 'theta': case 'f': case 'f2': return 4;
     case 'neg': case 'pow': return 3;
     case 'b': return (node.op === '*' || node.op === '/') ? 2 : 1;
   }
@@ -761,6 +845,7 @@ function astStr(node) {
     case 'x': return 'x';
     case 'theta': return '\u03b8';
     case 'f': return node.n + '(' + astStr(node.a) + ')';
+    case 'f2': return node.n + '(' + astStr(node.a) + ', ' + astStr(node.b) + ')';
     case 'neg': {
       const inner = astStr(node.a);
       return (node.a.t === 'b' || node.a.t === 'neg') ? '\u2212(' + inner + ')' : '\u2212' + inner;
@@ -924,6 +1009,7 @@ function hasVar(node) {
     case 'x': case 'y': case 'theta': return true;
     case 'neg': return hasVar(node.a);
     case 'f': return hasVar(node.a);
+    case 'f2': return hasVar(node.a) || hasVar(node.b);
     case 'pow': return hasVar(node.l) || hasVar(node.r);
     case 'b': return hasVar(node.l) || hasVar(node.r);
   }
@@ -1009,6 +1095,41 @@ function evalPoly(poly, x) {
   return s;
 }
 
+// One-argument functions (mirrors _apply_func in app/solver.py). Domain errors
+// come back as NaN (Math.* semantics) — the branch builder skips non-finite
+// samples, exactly like the Python side skips a raised ValueError.
+function applyFunc(n, v) {
+  switch (n) {
+    case 'sin': return Math.sin(v);
+    case 'cos': return Math.cos(v);
+    case 'tan': return Math.tan(v);
+    case 'asin': return Math.asin(v);
+    case 'acos': return Math.acos(v);
+    case 'atan': return Math.atan(v);
+    case 'sinh': return Math.sinh(v);
+    case 'cosh': return Math.cosh(v);
+    case 'tanh': return Math.tanh(v);
+    case 'log': return Math.log(v);
+    case 'log10': return Math.log10(v);
+    case 'log2': return Math.log2(v);
+    case 'sqrt': return Math.sqrt(v);
+    case 'cbrt': return Math.cbrt(v);
+    case 'exp': return Math.exp(v);
+    case 'abs': return Math.abs(v);
+    case 'floor': return Math.floor(v);
+    case 'ceil': return Math.ceil(v);
+    case 'round': return Math.round(v);
+    case 'sign': return Math.sign(v);
+  }
+  throw new Error('unknown function');
+}
+
+// Two-argument functions — atan2(y, x) only (mirrors _apply_func2).
+function applyFunc2(n, a, b) {
+  if (n === 'atan2') return Math.atan2(a, b);
+  throw new Error('unknown function');
+}
+
 function evalAst(node, x) {
   switch (node.t) {
     case 'num': return node.v;
@@ -1016,19 +1137,8 @@ function evalAst(node, x) {
     case 'x': return x;
     case 'theta': return x;
     case 'neg': return -evalAst(node.a, x);
-    case 'f': {
-      const v = evalAst(node.a, x);
-      switch (node.n) {
-        case 'sin': return Math.sin(v);
-        case 'cos': return Math.cos(v);
-        case 'tan': return Math.tan(v);
-        case 'log': return Math.log(v);
-        case 'sqrt': return Math.sqrt(v);
-        case 'exp': return Math.exp(v);
-        case 'abs': return Math.abs(v);
-      }
-      throw new Error('unknown function');
-    }
+    case 'f': return applyFunc(node.n, evalAst(node.a, x));
+    case 'f2': return applyFunc2(node.n, evalAst(node.a, x), evalAst(node.b, x));
     case 'b': {
       const l = evalAst(node.l, x), r = evalAst(node.r, x);
       switch (node.op) {
@@ -1055,19 +1165,8 @@ function evalAst2(node, x, y) {
     case 'y': return y;
     case 'theta': return x;
     case 'neg': return -evalAst2(node.a, x, y);
-    case 'f': {
-      const v = evalAst2(node.a, x, y);
-      switch (node.n) {
-        case 'sin': return Math.sin(v);
-        case 'cos': return Math.cos(v);
-        case 'tan': return Math.tan(v);
-        case 'log': return Math.log(v);
-        case 'sqrt': return Math.sqrt(v);
-        case 'exp': return Math.exp(v);
-        case 'abs': return Math.abs(v);
-      }
-      throw new Error('unknown function');
-    }
+    case 'f': return applyFunc(node.n, evalAst2(node.a, x, y));
+    case 'f2': return applyFunc2(node.n, evalAst2(node.a, x, y), evalAst2(node.b, x, y));
     case 'b': {
       const l = evalAst2(node.l, x, y), r = evalAst2(node.r, x, y);
       switch (node.op) {
@@ -1428,6 +1527,36 @@ function palette() { return currentTheme() === 'dark' ? PALETTES.dark : PALETTES
 
 function redraw() { if (lastCurves) draw(lastCurves); }
 
+// Paint for one branch: a flat rgba string, or a canvas linear gradient that
+// fades the row's first colour into its second along the branch. The axis runs
+// from the branch's first to its last point in screen space (left → right for
+// y = f(x), along the path for polar/implicit curves). A degenerate axis (a
+// closed loop whose ends coincide, e.g. a circle, or a single point) falls back
+// to the widest side of the branch's screen bounding box, so a gradient never
+// renders as nothing.
+function branchGradient(ctx, pts, c1, c2, alpha, X, Y) {
+  const n = pts.length;
+  let x0 = X(pts[0].x), y0 = Y(pts[0].y);
+  let x1 = X(pts[n - 1].x), y1 = Y(pts[n - 1].y);
+  if (Math.hypot(x1 - x0, y1 - y0) < 1e-6) {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const px = X(pts[i].x), py = Y(pts[i].y);
+      if (px < minX) minX = px;
+      if (px > maxX) maxX = px;
+      if (py < minY) minY = py;
+      if (py > maxY) maxY = py;
+    }
+    if (maxX - minX >= maxY - minY) { x0 = minX; x1 = maxX; y0 = y1 = (minY + maxY) / 2; }
+    else { x0 = x1 = (minX + maxX) / 2; y0 = minY; y1 = maxY; }
+    if (Math.hypot(x1 - x0, y1 - y0) < 1e-6) return colorWithAlpha(c1, alpha);
+  }
+  const g = ctx.createLinearGradient(x0, y0, x1, y1);
+  g.addColorStop(0, colorWithAlpha(c1, alpha));
+  g.addColorStop(1, colorWithAlpha(c2, alpha));
+  return g;
+}
+
 function draw(curves) {
   markPngDirty();   // keep the ready-to-share PNG in step with the canvas
   const cv = document.getElementById('graph');
@@ -1510,10 +1639,17 @@ function draw(curves) {
     if (curve.inequality) drawInequalityShade(ctx, curve, X, Y, W, H);
     // Stroke at the row's chosen opacity: 'rgba(...)' colour so the alpha
     // applies to this curve's own pixels only (no globalAlpha save/restore).
-    const curveColor = colorWithAlpha(curve.color, opToAlpha(curve.opacity));
+    // A row whose second colour differs from its first strokes with a
+    // gradient along the curve instead of a flat colour.
+    const curveAlpha = opToAlpha(curve.opacity);
+    const curveColor = colorWithAlpha(curve.color, curveAlpha);
+    const flat = !(curve.color2 && curve.color2 !== curve.color);
     curve.branches.forEach(function (br) {
       if (!br.points.length) return;
-      ctx.strokeStyle = curveColor;
+      const paint = flat
+        ? curveColor
+        : branchGradient(ctx, br.points, curve.color, curve.color2, curveAlpha, X, Y);
+      ctx.strokeStyle = paint;
       ctx.lineWidth = 2.5;
       ctx.lineJoin = 'round';
       ctx.lineCap = 'round';
@@ -1531,7 +1667,7 @@ function draw(curves) {
       // Point markers — only when the unit spacing is wide enough that they
       // don't merge into a solid ribbon.
       if (unit >= 6) {
-        ctx.fillStyle = curveColor;
+        ctx.fillStyle = paint;
         for (const p of br.points) {
           const px = X(p.x), py = Y(p.y);
           if (px < 0 || px > W || py < 0 || py > H) continue;
@@ -1749,10 +1885,11 @@ function cssColorToHex(value) {
 
 // Give one row a colour: device swatch + hex box stay in step and the curve
 // recolours live (no server round-trip) — exactly what a device-picker change
-// does. Shared by the hex box and the palette popover.
-function setRowColor(row, hex) {
-  const pick = row.querySelector('.color-pick');
-  const box = row.querySelector('.hex-pick');
+// does. Shared by the hex box and the palette popover. `ch` selects the colour
+// part: 'a' = the line colour, 'b' = the gradient end colour.
+function setRowColor(row, hex, ch) {
+  const pick = row.querySelector(ch === 'b' ? '.color2-pick' : '.color-pick');
+  const box = row.querySelector(ch === 'b' ? '.hex2-pick' : '.hex-pick');
   if (pick) pick.value = hex;
   if (box) { box.value = hex; box.classList.remove('bad'); }
   applyPickerColours();
@@ -1760,6 +1897,7 @@ function setRowColor(row, hex) {
 
 // --- palette popover: ONE element shared by every row's ▾ button ----------
 let palRow = null;   // the row whose ▾ button opened the popover
+let palCh = 'a';     // which colour part that button edits ('a' | 'b')
 
 function buildPalette() {
   const grid = document.getElementById('palGrid');
@@ -1775,7 +1913,7 @@ function buildPalette() {
     b.setAttribute('role', 'option');
     b.setAttribute('aria-label', hex);
     b.addEventListener('click', function () {
-      if (palRow) setRowColor(palRow, hex);
+      if (palRow) setRowColor(palRow, hex, palCh);
       closePalette();
     });
     grid.appendChild(b);
@@ -1785,6 +1923,11 @@ function buildPalette() {
 function openPalette(btn) {
   const pop = document.getElementById('palPop');
   palRow = btn.closest('.formula-row');
+  // Which colour part this ▾ belongs to: the gradient-end button carries
+  // data-ch="b" (and holds the .color2-pick swatch as a fallback signal).
+  const part = btn.closest('.color-part');
+  palCh = (btn.dataset && btn.dataset.ch) ? btn.dataset.ch
+        : (part && part.querySelector('.color2-pick')) ? 'b' : 'a';
   pop.hidden = false;
   // Keep the panel inside the viewport: below the button, flipped above when
   // there is no room, and clamped horizontally on narrow screens.
@@ -1795,7 +1938,7 @@ function openPalette(btn) {
   if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6);
   pop.style.left = left + 'px';
   pop.style.top = top + 'px';
-  const box = palRow ? palRow.querySelector('.hex-pick') : null;
+  const box = palRow ? palRow.querySelector(palCh === 'b' ? '.hex2-pick' : '.hex-pick') : null;
   const cur = box ? cssColorToHex(box.value) : null;
   pop.querySelectorAll('.pal-sw').forEach(function (s) {
     s.classList.toggle('on', s.dataset.hex === cur);
@@ -1806,6 +1949,137 @@ function closePalette() {
   const pop = document.getElementById('palPop');
   if (pop) pop.hidden = true;
   palRow = null;
+}
+
+/* --- function menu: ONE shared panel, inserts at the caret ---------------- */
+
+// Tooltip descriptions for the menu chips. Keys must cover FUNCTIONS exactly —
+// test_index_function_menu_covers_every_function keeps them in lockstep.
+const FN_HELP = {
+  sin: 'sine', cos: 'cosine', tan: 'tangent',
+  asin: 'inverse sine — only defined for |x| ≤ 1',
+  acos: 'inverse cosine — only defined for |x| ≤ 1',
+  atan: 'inverse tangent',
+  atan2: 'two-argument arctangent — atan2(y, x), comma separated',
+  sinh: 'hyperbolic sine', cosh: 'hyperbolic cosine', tanh: 'hyperbolic tangent',
+  log: 'natural logarithm (same as ln)', ln: 'natural logarithm',
+  log10: 'base-10 logarithm', log2: 'base-2 logarithm',
+  sqrt: 'square root', cbrt: 'cube root (negatives allowed)', exp: 'e raised to the power',
+  abs: 'absolute value', floor: 'round down', ceil: 'round up',
+  round: 'round to the nearest (half up)', sign: '−1, 0 or 1',
+};
+
+// Constants are inserted WITHOUT a "(" — they are symbols, not calls. θ is the
+// polar-mode angle (the same variable as "theta").
+const FN_CONSTS = [
+  ['pi', 'π ≈ 3.14159'],
+  ['e', 'Euler\'s number ≈ 2.71828'],
+  ['\u03b8', 'the angle in polar mode (same as "theta")'],
+];
+
+// Insert `ins` into `value` where [start, end) is selected, and say where the
+// caret lands (just after the insert, i.e. INSIDE the new parentheses). Pure —
+// the node suite exercises it without a DOM (test/solver.test.js).
+function spliceAtCaret(value, start, end, ins) {
+  const v = String(value == null ? '' : value);
+  const n = v.length;
+  const s = (typeof start === 'number' && start >= 0 && start <= n) ? start : n;
+  const e = (typeof end === 'number' && end >= s && end <= n) ? end : s;
+  return { value: v.slice(0, s) + ins + v.slice(e), caret: s + ins.length };
+}
+
+let fnInput = null;   // the formula input the menu inserts into
+let fnCaret = null;   // {start, end} captured on mousedown, before any blur
+let fnBtn = null;     // the ƒ button that opened the panel
+
+function buildFunctionMenu() {
+  const grid = document.getElementById('fnGrid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  FUNCTIONS.forEach(function (name) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'fn-sw';
+    b.dataset.fn = name;
+    b.textContent = name + '(';
+    b.title = name + '() — ' + (FN_HELP[name] || '');
+    b.setAttribute('role', 'option');
+    b.setAttribute('aria-label', name + ' — ' + (FN_HELP[name] || ''));
+    b.addEventListener('click', function () { insertFunctionAtCaret(name + '('); });
+    grid.appendChild(b);
+  });
+  const consts = document.getElementById('fnConsts');
+  if (!consts) return;
+  consts.innerHTML = '';
+  FN_CONSTS.forEach(function (pair) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'fn-sw';
+    b.dataset.fn = pair[0];
+    b.textContent = pair[0];
+    b.title = pair[0] + ' — ' + pair[1];
+    b.setAttribute('role', 'option');
+    b.setAttribute('aria-label', pair[0] + ' — ' + pair[1]);
+    b.addEventListener('click', function () { insertFunctionAtCaret(pair[0]); });
+    consts.appendChild(b);
+  });
+}
+
+// Drop the chosen text into the formula field at the remembered caret, leave
+// the caret just inside the new "(", and hand focus back to the field so the
+// next keystroke types the argument.
+function insertFunctionAtCaret(text) {
+  const input = fnInput;
+  if (!input) { closeFunctionMenu(); return; }
+  const start = fnCaret ? fnCaret.start : input.value.length;
+  const end = fnCaret ? fnCaret.end : input.value.length;
+  const out = spliceAtCaret(input.value, start, end, text);
+  input.value = out.value;
+  closeFunctionMenu();
+  try {
+    input.focus();
+    input.setSelectionRange(out.caret, out.caret);
+  } catch (e) { /* field gone (row removed) — value is still set */ }
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function openFunctionMenu(btn) {
+  const pop = document.getElementById('fnPop');
+  if (!pop) return;
+  fnBtn = btn;
+  fnInput = btn.closest('.formula-row').querySelector('.formula-input');
+  // The caret was captured on mousedown (the field still had focus then). With
+  // no capture: use the live selection when the field is focused, otherwise
+  // append — never insert at position 0 of a field the user never touched.
+  if (!fnCaret && fnInput) {
+    fnCaret = (document.activeElement === fnInput)
+      ? { start: fnInput.selectionStart, end: fnInput.selectionEnd }
+      : { start: fnInput.value.length, end: fnInput.value.length };
+  }
+  closePalette();   // the two panels never stack
+  pop.hidden = false;
+  if (btn.setAttribute) btn.setAttribute('aria-expanded', 'true');
+  if (btn.classList) btn.classList.add('on');
+  // Same viewport-clamping as the palette popover.
+  const r = btn.getBoundingClientRect();
+  const w = pop.offsetWidth, h = pop.offsetHeight;
+  const left = Math.max(8, Math.min(r.left - 4, window.innerWidth - w - 8));
+  let top = r.bottom + 6;
+  if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6);
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
+}
+
+function closeFunctionMenu() {
+  const pop = document.getElementById('fnPop');
+  if (pop) pop.hidden = true;
+  if (fnBtn) {
+    if (fnBtn.setAttribute) fnBtn.setAttribute('aria-expanded', 'false');
+    if (fnBtn.classList) fnBtn.classList.remove('on');
+  }
+  fnBtn = null;
+  fnCaret = null;
+  fnInput = null;
 }
 
 // Per-row line opacity, in percent of the row's colour (0..100). 100 = fully
@@ -1834,6 +2108,15 @@ function colorWithAlpha(hex, alpha) {
   const n = parseInt(m[1], 16);
   return 'rgba(' + (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' +
     Math.round(alpha * 1000) / 1000 + ')';
+}
+
+// Fill for a legend/table dot: a CSS gradient when the row's second colour
+// differs from the first, otherwise the plain rgba colour. Mirrors what the
+// canvas draws for that curve.
+function colorFill(c1, c2, alpha) {
+  const a = colorWithAlpha(c1, alpha);
+  if (!c2 || c2 === c1) return a;
+  return 'linear-gradient(90deg, ' + a + ', ' + colorWithAlpha(c2, alpha) + ')';
 }
 
 // A palette colour not already in use by another row (falls back to cycling).
@@ -1950,12 +2233,16 @@ function collectSpecs() {
     const rot = rotEl ? rotNum(rotEl.value) : DEFAULT_ROTATION;
     // Colour comes from the device swatch, which is the single source of
     // truth: the hex box is just another way to write to it (on commit), so a
-    // half-typed box value can never leak into the URL or the canvas.
+    // half-typed box value can never leak into the URL or the canvas. The
+    // second swatch is the gradient END colour (equal to the first = solid).
     const color = row.querySelector('.color-pick').value;
+    const c2el = row.querySelector('.color2-pick');
+    const color2 = c2el ? c2el.value : color;
     const key = f + '|' + cx + '|' + cy + '|' + rot;
     if (seen[key]) return;
     seen[key] = true;
-    specs.push({ formula: f, cx: cx, cy: cy, rot: rot, color: color, op: opNum(row.querySelector('.opacity-pick').value), key: key });
+    specs.push({ formula: f, cx: cx, cy: cy, rot: rot, color: color, color2: color2,
+                 op: opNum(row.querySelector('.opacity-pick').value), key: key });
   });
   return specs;
 }
@@ -1982,8 +2269,8 @@ const MAX_ROWS = 5;
 // The per-row controls a duplicated row must carry. cloneNode(true) copies
 // ATTRIBUTES (the server-rendered values), NOT anything typed since, so each
 // field's live .value has to be copied explicitly.
-const ROW_FIELDS = ['.formula-input', '.color-pick', '.hex-pick', '.opacity-pick',
-                    '.ctr-x', '.ctr-y', '.rot-pick'];
+const ROW_FIELDS = ['.formula-input', '.color-pick', '.hex-pick', '.color2-pick', '.hex2-pick',
+                    '.opacity-pick', '.ctr-x', '.ctr-y', '.rot-pick'];
 
 // Icons built in JS mirror the inline SVGs in the template (same .ico classes,
 // so they inherit the same stroke/currentColor rules).
@@ -2041,34 +2328,70 @@ function addFormulaRow(value) {
   input.autocomplete = 'off';
   input.placeholder = mode === 'polar' ? 'e.g. r = 2\u03b8' : 'e.g. y = cos(x)';
   if (value) input.value = value;
-  // Colour cell: device swatch + hex box + palette button. Mirrors the
-  // server-rendered `.color-cell` in every template row.
+  // Function-menu button — mirrors the server-rendered `.fn-btn`. No listener:
+  // its click is handled by delegation on #formulaRows.
+  const fnb = document.createElement('button');
+  fnb.type = 'button';
+  fnb.className = 'fn-btn';
+  fnb.title = 'Insert a supported function at the cursor';
+  fnb.setAttribute('aria-label', 'Insert a supported function at the cursor');
+  fnb.setAttribute('aria-haspopup', 'menu');
+  fnb.setAttribute('aria-expanded', 'false');
+  fnb.textContent = '\u0192';
+  // Colour cell: TWO colour parts (gradient start → end), each a device
+  // swatch + hex box + palette button. Mirrors the server-rendered
+  // `.color-cell` in every template row. Both channels start on the row's
+  // palette colour, so a fresh row is a solid line until the second colour
+  // is changed.
   const newColor = nextFreeColor();
+  const mkColorPart = function (ch, swCls, boxCls, btnCls, hex, swTitle, boxTitle, aria) {
+    const part = document.createElement('span');
+    part.className = 'color-part';
+    part.dataset.ch = ch;
+    const sw = document.createElement('input');
+    sw.type = 'color';
+    sw.className = swCls;
+    sw.title = swTitle;
+    sw.value = hex;
+    const bx = document.createElement('input');
+    bx.type = 'text';
+    bx.className = boxCls;
+    bx.value = hex;
+    bx.spellcheck = false;
+    bx.autocomplete = 'off';
+    bx.maxLength = 24;
+    bx.title = boxTitle;
+    bx.setAttribute('aria-label', aria);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = btnCls;
+    btn.dataset.ch = ch;
+    btn.title = btnCls === 'pal2-btn' ? 'Pick the gradient end colour from the palette' : 'Pick from the colour palette';
+    btn.setAttribute('aria-label', btn.title);
+    btn.textContent = '\u25be';
+    part.appendChild(sw);
+    part.appendChild(bx);
+    part.appendChild(btn);
+    return part;
+  };
   const cell = document.createElement('span');
   cell.className = 'color-cell';
-  const pick = document.createElement('input');
-  pick.type = 'color';
-  pick.className = 'color-pick';
-  pick.title = 'Device colour picker — on Android this is a small fixed palette, so use the box beside it for any colour';
-  pick.value = newColor;
-  const box = document.createElement('input');
-  box.type = 'text';
-  box.className = 'hex-pick';
-  box.value = newColor;
-  box.spellcheck = false;
-  box.autocomplete = 'off';
-  box.maxLength = 24;
-  box.title = 'Any opaque CSS colour — #rgb, #rrggbb, rgb(…), hsl(…) or a name like tomato; press Enter to apply (use the % field for transparency)';
-  box.setAttribute('aria-label', 'Line colour as an opaque CSS colour value');
-  const palBtn = document.createElement('button');
-  palBtn.type = 'button';
-  palBtn.className = 'pal-btn';
-  palBtn.title = 'Pick from the colour palette';
-  palBtn.setAttribute('aria-label', 'Open the colour palette');
-  palBtn.textContent = '\u25be';
-  cell.appendChild(pick);
-  cell.appendChild(box);
-  cell.appendChild(palBtn);
+  cell.appendChild(mkColorPart(
+    'a', 'color-pick', 'hex-pick', 'pal-btn', newColor,
+    'Device colour picker — on Android this is a small fixed palette, so use the box beside it for any colour',
+    'Any opaque CSS colour — #rgb, #rrggbb, rgb(…), hsl(…) or a name like tomato; press Enter to apply (use the % field for transparency)',
+    'Line colour as an opaque CSS colour value'));
+  const arrow = document.createElement('span');
+  arrow.className = 'color-arrow';
+  arrow.textContent = '\u2192';
+  arrow.title = 'Gradient: the line fades from the first colour into the second one along the curve (identical colours = a solid line)';
+  arrow.setAttribute('aria-hidden', 'true');
+  cell.appendChild(arrow);
+  cell.appendChild(mkColorPart(
+    'b', 'color2-pick', 'hex2-pick', 'pal2-btn', newColor,
+    'Gradient end colour — the line fades from the first colour into this one along the curve; leave it equal to the first colour for a solid line. On Android use the box beside it for any colour',
+    'Gradient end colour as any opaque CSS colour — #rgb, #rrggbb, rgb(…), hsl(…) or a name like tomato; press Enter to apply',
+    'Gradient end colour as an opaque CSS colour value'));
   // Line opacity in percent (0–100, default 100 = fully opaque). Mirrors
   // the server-rendered `.opacity-pick` in each template row.
   const opWrap = document.createElement('span');
@@ -2150,6 +2473,7 @@ function addFormulaRow(value) {
   del.setAttribute('aria-label', 'Remove this formula');
   del.innerHTML = ICON.remove;
   row.appendChild(input);
+  row.appendChild(fnb);
   row.appendChild(cell);
   row.appendChild(opWrap);
   row.appendChild(ctr);
@@ -2204,8 +2528,12 @@ function applyPickerColours() {
   if (!formulas.length) return;
   if (formulas.length !== colors.length) return;
   if (colorsMatchRows()) {
-    const ops = collectSpecs().map(function (s) { return s.op; });
-    lastCurves.forEach(function (c, i) { c.color = colors[i]; c.opacity = ops[i]; });
+    const specs = collectSpecs();
+    lastCurves.forEach(function (c, i) {
+      c.color = colors[i];
+      c.color2 = specs[i] ? specs[i].color2 : colors[i];
+      c.opacity = specs[i] ? specs[i].op : DEFAULT_OPACITY;
+    });
     redraw();
     renderLegend(lastCurves);
     renderTable(lastCurves, colors);
@@ -2235,9 +2563,10 @@ function renderTable(curves, colors) {
   document.getElementById('colY').textContent = polar ? 'r' : 'y';
   let html = '';
   curves.forEach(function (c, ci) {
-    const color = (colors && colors[ci]) || '#2563eb';
+    const color = (colors && colors[ci]) || c.color || '#2563eb';
+    const color2 = c.color2 || color;
     html += '<tr class="branch-hdr"><td colspan="2">' +
-      '<span class="dot-inline" style="background:' + colorWithAlpha(color, opToAlpha(c.opacity)) + '"></span>' +
+      '<span class="dot-inline" style="background:' + colorFill(color, color2, opToAlpha(c.opacity)) + '"></span>' +
       c.display + transformLabel(c) + '</td></tr>';
     c.branches.forEach(function (br) {
       if (c.branches.length > 1) {
@@ -2260,7 +2589,7 @@ function renderLegend(curves) {
     item.className = 'legend-item';
     const dot = document.createElement('span');
     dot.className = 'color-dot';
-    dot.style.background = colorWithAlpha(c.color, opToAlpha(c.opacity));
+    dot.style.background = colorFill(c.color, c.color2, opToAlpha(c.opacity));
     const label = document.createElement('span');
     label.textContent = c.display + (c.inequality ? '  ' + c.inequality.op : '') + transformLabel(c);
     item.appendChild(dot);
@@ -2487,13 +2816,17 @@ function rangeParams(formulas) {
   if (xMin !== '') p.set('x_min', xMin);
   if (xMax !== '') p.set('x_max', xMax);
   if (xStep !== '') p.set('x_step', xStep);
-  // Colour + centre params, aligned with the deduped spec list. When ANY
+  // Colour params, aligned with the deduped spec list. When ANY
   // row differs from its default, the FULL list is sent — an earlier
   // default row must keep its position so later rows don't shift on
   // reload (sending only the non-defaults would misalign by index).
   const specs = collectSpecs();
   const anyColor = specs.some(function (s, i) { return s.color !== paletteAt(i); });
   if (anyColor) specs.forEach(function (s) { p.append('color', s.color); });
+  // Gradient end colour — only when SOME row's second colour differs from its
+  // first (a row left on one colour is a solid line and needs no param).
+  const anyColor2 = specs.some(function (s) { return s.color2 !== s.color; });
+  if (anyColor2) specs.forEach(function (s) { p.append('color2', s.color2); });
   // Opacity params — same rule as colours: only when SOME row differs from
   // the default (100); the FULL list is then sent so rows stay aligned.
   const anyOpacity = specs.some(function (s) { return s.op !== DEFAULT_OPACITY; });
@@ -2586,7 +2919,9 @@ async function plot() {
   // own frame (unrotated, untranslated) so the table still reads as the input.
   const centers = collectCenters();
   const rots = collectRotations();
-  const ops = collectSpecs().map(function (s) { return s.op; });
+  const plotSpecs = collectSpecs();
+  const ops = plotSpecs.map(function (s) { return s.op; });
+  const color2s = plotSpecs.map(function (s) { return s.color2; });
   const curves = data.curves.map(function (c, i) {
     const cx = (centers[i] && centers[i].x) || 0;
     const cy = (centers[i] && centers[i].y) || 0;
@@ -2609,6 +2944,9 @@ async function plot() {
     }) : c.branches;
     return {
       color: colors[i] || paletteAt(i),
+      // Gradient end colour: the row's second swatch, defaulting to the first
+      // colour (a flat, single-colour stroke) when it is missing or equal.
+      color2: color2s[i] || colors[i] || paletteAt(i),
       opacity: ops[i] === undefined ? DEFAULT_OPACITY : ops[i],
       display: c.display,
       branches: branches,
@@ -2760,11 +3098,12 @@ function init() {
   document.getElementById('formulaRows').addEventListener('input', function (e) {
     const t = e.target;
     if (!t || !t.classList) return;
-    if (t.classList.contains('color-pick')) {
-      const box = t.closest('.formula-row').querySelector('.hex-pick');
+    if (t.classList.contains('color-pick') || t.classList.contains('color2-pick')) {
+      const pick2 = t.classList.contains('color2-pick');
+      const box = t.closest('.formula-row').querySelector(pick2 ? '.hex2-pick' : '.hex-pick');
       if (box) { box.value = t.value.toLowerCase(); box.classList.remove('bad'); }
       applyPickerColours();
-    } else if (t.classList.contains('hex-pick')) {
+    } else if (t.classList.contains('hex-pick') || t.classList.contains('hex2-pick')) {
       t.classList.remove('bad');           // mid-typing is never "wrong"
     } else if (t.classList.contains('opacity-pick')) {
       applyPickerColours();
@@ -2788,8 +3127,10 @@ function init() {
     // cannot use as an opaque colour (#gg0000, "#ff88" -- which carries alpha
     // -- or a half-typed one) is KEPT and flagged, so nothing is silently
     // overwritten, and the curve stays on the row's last good colour.
-    if (e.target && e.target.classList && e.target.classList.contains('hex-pick')) {
-      const pick = e.target.closest('.formula-row').querySelector('.color-pick');
+    if (e.target && e.target.classList &&
+        (e.target.classList.contains('hex-pick') || e.target.classList.contains('hex2-pick'))) {
+      const pick2 = e.target.classList.contains('hex2-pick');
+      const pick = e.target.closest('.formula-row').querySelector(pick2 ? '.color2-pick' : '.color-pick');
       const hex = cssColorToHex(e.target.value);
       if (hex) {
         if (pick) pick.value = hex;
@@ -2805,25 +3146,61 @@ function init() {
   // (one shared panel; a swatch applies that colour; click-outside / Escape /
   // resize / scroll dismiss it), duplicate-row and remove-row.
   buildPalette();
+  buildFunctionMenu();
+  // The ƒ button must not steal focus from the formula field: suppressing its
+  // mousedown keeps the caret (and its selection) alive, which is the whole
+  // point of "insert at the cursor". The caret is recorded here because
+  // mousedown fires BEFORE the field loses focus.
+  document.getElementById('formulaRows').addEventListener('mousedown', function (e) {
+    const t = e.target;
+    if (!t || !t.closest || !t.closest('.fn-btn')) return;
+    const row = t.closest('.formula-row');
+    const input = row ? row.querySelector('.formula-input') : null;
+    fnCaret = (input && document.activeElement === input)
+      ? { start: input.selectionStart, end: input.selectionEnd }
+      : null;                       // openFunctionMenu appends in that case
+    e.preventDefault();
+  });
   document.getElementById('formulaRows').addEventListener('click', function (e) {
     const t = e.target;
     if (!t || !t.closest) return;
     const row = t.closest('.formula-row');
     if (!row) return;
-    if (t.closest('.pal-btn')) { openPalette(t.closest('.pal-btn')); return; }
+    if (t.closest('.fn-btn')) {
+      const btn = t.closest('.fn-btn');
+      const pop = document.getElementById('fnPop');
+      if (pop && !pop.hidden && fnBtn === btn) { closeFunctionMenu(); return; }
+      openFunctionMenu(btn);
+      return;
+    }
+    if (t.closest('.pal-btn') || t.closest('.pal2-btn')) {
+      openPalette(t.closest('.pal-btn') || t.closest('.pal2-btn'));
+      return;
+    }
     if (t.closest('.row-dup')) { duplicateRow(row); return; }
     if (t.closest('.row-del')) { row.remove(); onRowsChanged(); }
   });
   document.addEventListener('click', function (e) {
     const pop = document.getElementById('palPop');
-    if (!pop || pop.hidden) return;
-    if (pop.contains(e.target)) return;
-    if (e.target.closest && e.target.closest('.pal-btn')) return;
-    closePalette();
+    if (pop && !pop.hidden) {
+      const inPop = pop.contains(e.target);
+      const onBtn = e.target.closest && (e.target.closest('.pal-btn') || e.target.closest('.pal2-btn'));
+      if (!inPop && !onBtn) closePalette();
+    }
+    const fpop = document.getElementById('fnPop');
+    if (fpop && !fpop.hidden) {
+      const inPop = fpop.contains(e.target);
+      const onBtn = e.target.closest && e.target.closest('.fn-btn');
+      if (!inPop && !onBtn) closeFunctionMenu();
+    }
   });
-  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closePalette(); });
-  window.addEventListener('resize', closePalette);
-  window.addEventListener('scroll', closePalette, true);
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    closePalette();
+    closeFunctionMenu();
+  });
+  window.addEventListener('resize', function () { closePalette(); closeFunctionMenu(); });
+  window.addEventListener('scroll', function () { closePalette(); closeFunctionMenu(); }, true);
   document.getElementById('pngBtn').addEventListener('click', exportPng);
   document.getElementById('copyBtn').addEventListener('click', copyLink);
   document.getElementById('shareBtn').addEventListener('click', shareImage);

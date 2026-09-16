@@ -28,10 +28,22 @@ UNBOUNDED_WINDOW = 200      # span for one-sided unbounded domains
 UNBOUNDED_FALLBACK = 100    # symmetric default for fully unbounded domains
 MAX_POINTS_PER_BRANCH = 5000  # explicit ranges are capped at this many points
 
-FUNCTIONS = {"sin", "cos", "tan", "log", "ln", "sqrt", "exp", "abs"}
+FUNCTIONS = {
+    # trig + inverses + hyperbolics (atan2 takes TWO arguments)
+    "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+    "sinh", "cosh", "tanh",
+    # logs, roots, exponential, magnitude
+    "log", "ln", "log10", "log2", "sqrt", "cbrt", "exp", "abs",
+    # rounding / sign
+    "floor", "ceil", "round", "sign",
+}
 _KNOWN_NAMES = FUNCTIONS | {"pi", "theta", "e"}
+# Functions whose call takes two comma-separated arguments — atan2(y, x) only.
+TWO_ARG_FUNCTIONS = {"atan2"}
 _FUNC_RE = re.compile(
-    r"[()]|(?:sin|cos|tan|log|ln|sqrt|exp|abs)\(|(?<![a-zA-Z])e(?![a-zA-Z])|pi"
+    r"[()]|(?:"
+    + "|".join(sorted(FUNCTIONS, key=len, reverse=True))
+    + r")\(|(?<![a-zA-Z])e(?![a-zA-Z])|pi"
 )
 FUNCTION_Y_LIMIT = 1e6  # |y| beyond this is treated as an asymptote blow-up (tan, 1/x)
 DEFAULT_POLAR_MAX = 4 * math.pi  # default θ range for polar mode: two full turns
@@ -260,6 +272,8 @@ def _has_var(node) -> bool:
         return True
     if t in ("neg", "func"):
         return _has_var(node[1] if t == "neg" else node[2])
+    if t == "func2":  # atan2(y, x) — two arguments
+        return _has_var(node[2]) or _has_var(node[3])
     if t == "pow":
         return _has_var(node[1]) or _has_var(node[2])
     if t == "bin":
@@ -350,7 +364,7 @@ def _solve_polynomial(lhs_str: str, rhs_str: str) -> dict:
 # ============================================================================
 # Expression path: y = f(x) with parentheses, functions, e/pi constants.
 # AST node shapes (tuples): ("num", v) ("sym", "e"|"pi") ("x",) ("y",)
-#   ("neg", n) ("func", name, n) ("bin", op, l, r) ("pow", l, r)
+#   ("neg", n) ("func", name, n) ("func2", name, n, n) ("bin", op, l, r) ("pow", l, r)
 # ============================================================================
 
 class _NonLinearY(Exception):
@@ -393,6 +407,16 @@ def expr_tokenize(s: str) -> list:
             while j < n and s[j].isalpha():
                 j += 1
             name = s[i:j]
+            # Names that carry a digit (log10, log2, atan2) span an
+            # alphanumeric run, so swallow the digits that follow the letters
+            # when the whole run is a known name — "log10(2)" must not read as
+            # log * 10 * (2). "x2" keeps its old meaning (x * 2) because "x2"
+            # is not a known name.
+            k = j
+            while k < n and s[k].isdigit():
+                k += 1
+            if s[i:k] in _KNOWN_NAMES:
+                name, j = s[i:k], k
             if name not in _KNOWN_NAMES and all(ch in "xy" for ch in name):
                 # "xy" -> x*y, "xx" -> x*x (implicit multiplication of
                 # single-letter variables); multi-letter names that are not
@@ -404,7 +428,7 @@ def expr_tokenize(s: str) -> list:
                 tokens.append(("name", name))
             i = j
             continue
-        if c in "+-*/^()":
+        if c in "+-*/^(),":
             tokens.append(("op", c))
             i += 1
             continue
@@ -491,12 +515,23 @@ class _ExprParser:
                 return ("theta",)
             if self.peek() == ("op", "("):
                 self._next()
-                inner = self.expr()
-                if self._next() != ("op", ")"):
-                    raise SolverError("Missing closing parenthesis.")
                 name = "log" if t[1] == "ln" else t[1]
                 if name not in FUNCTIONS:
                     raise SolverError(f"Unknown function '{t[1]}'.")
+                inner = self.expr()
+                if name in TWO_ARG_FUNCTIONS:
+                    # atan2(y, x) — the only two-argument function today.
+                    if self.peek() != ("op", ","):
+                        raise SolverError(f"Function '{t[1]}' takes two arguments.")
+                    self._next()
+                    second = self.expr()
+                    if self._next() != ("op", ")"):
+                        raise SolverError("Missing closing parenthesis.")
+                    return ("func2", name, inner, second)
+                if self.peek() == ("op", ","):
+                    raise SolverError(f"Function '{t[1]}' takes one argument.")
+                if self._next() != ("op", ")"):
+                    raise SolverError("Missing closing parenthesis.")
                 return ("func", name, inner)
             if t[1] in ("e", "pi"):
                 return ("sym", t[1])
@@ -533,6 +568,12 @@ def _linearize(node) -> tuple:
         if a is not None:
             raise SolverError("Cannot solve — 'y' appears inside a function.")
         return None, ("func", node[1], b)
+    if t == "func2":  # atan2(y, x): y inside ANY argument is unsolvable here
+        al, bl = _linearize(node[2])
+        ar, br = _linearize(node[3])
+        if al is not None or ar is not None:
+            raise SolverError("Cannot solve — 'y' appears inside a function.")
+        return None, ("func2", node[1], bl, br)
     if t == "pow":
         al, _bl = _linearize(node[1])
         ar, _br = _linearize(node[2])
@@ -598,6 +639,8 @@ def _simplify(node) -> tuple:
         return ("neg", c)
     if t == "func":
         return ("func", node[1], _simplify(node[2]))
+    if t == "func2":
+        return ("func2", node[1], _simplify(node[2]), _simplify(node[3]))
     if t == "pow":
         l = _simplify(node[1])
         r = _simplify(node[2])
@@ -663,7 +706,7 @@ def _simplify(node) -> tuple:
 
 
 def _prec(node) -> int:
-    if node[0] in ("num", "sym", "x", "y", "theta", "func"):
+    if node[0] in ("num", "sym", "x", "y", "theta", "func", "func2"):
         return 4
     if node[0] in ("neg", "pow"):
         return 3
@@ -685,6 +728,8 @@ def _ast_str(node) -> str:
         return "\u03b8"
     if t == "func":
         return node[1] + "(" + _ast_str(node[2]) + ")"
+    if t == "func2":
+        return node[1] + "(" + _ast_str(node[2]) + ", " + _ast_str(node[3]) + ")"
     if t == "neg":
         inner = _ast_str(node[1])
         if node[1][0] in ("bin", "neg"):
@@ -775,6 +820,67 @@ def _solve_functional(lhs_str: str, rhs_str: str, polar: bool = False) -> dict |
     return {"kind": kind, "expr": expr, "b": a_tot, "display": display}
 
 
+def _apply_func(name: str, v: float) -> float:
+    """Apply a one-argument function (mirrors ``applyFunc`` in the template JS).
+
+    Domain errors (``asin(2)``, ``log(0)``) are deliberately left to raise
+    ``ValueError`` — the callers turn that into "not plottable here" and skip
+    the sample, exactly like a non-finite JS value does in the twin solver.
+    """
+    if name == "sin":
+        return math.sin(v)
+    if name == "cos":
+        return math.cos(v)
+    if name == "tan":
+        return math.tan(v)
+    if name == "asin":
+        return math.asin(v)
+    if name == "acos":
+        return math.acos(v)
+    if name == "atan":
+        return math.atan(v)
+    if name == "sinh":
+        return math.sinh(v)
+    if name == "cosh":
+        return math.cosh(v)
+    if name == "tanh":
+        return math.tanh(v)
+    if name == "log":
+        return math.log(v)
+    if name == "log10":
+        return math.log10(v)
+    if name == "log2":
+        return math.log2(v)
+    if name == "sqrt":
+        return math.sqrt(v)
+    if name == "cbrt":
+        return math.cbrt(v)  # real cube root, negatives included (-8 -> -2)
+    if name == "exp":
+        return math.exp(v)
+    if name == "abs":
+        return abs(v)
+    if name == "floor":
+        return float(math.floor(v))
+    if name == "ceil":
+        return float(math.ceil(v))
+    if name == "round":
+        # JavaScript's Math.round (half up / toward +inf), NOT Python's
+        # banker's rounding — round(0.5) must be 1 in both solvers.
+        return float(math.floor(v + 0.5))
+    if name == "sign":
+        if v != v:  # NaN -> NaN (JS Math.sign)
+            return v
+        return 0.0 if v == 0 else math.copysign(1.0, v)
+    raise SolverError(f"Internal solver error: unknown function {name}.")  # pragma: no cover
+
+
+def _apply_func2(name: str, a: float, b: float) -> float:
+    """Apply a two-argument function — ``atan2(y, x)`` is the only one."""
+    if name == "atan2":
+        return math.atan2(a, b)
+    raise SolverError(f"Internal solver error: unknown function {name}.")  # pragma: no cover
+
+
 def eval_ast(node, x: float) -> float:
     """Numerically evaluate an x-only AST at ``x``."""
     t = node[0]
@@ -791,23 +897,9 @@ def eval_ast(node, x: float) -> float:
     if t == "neg":
         return -eval_ast(node[1], x)
     if t == "func":
-        v = eval_ast(node[2], x)
-        f = node[1]
-        if f == "sin":
-            return math.sin(v)
-        if f == "cos":
-            return math.cos(v)
-        if f == "tan":
-            return math.tan(v)
-        if f == "log":
-            return math.log(v)
-        if f == "sqrt":
-            return math.sqrt(v)
-        if f == "exp":
-            return math.exp(v)
-        if f == "abs":
-            return abs(v)
-        raise SolverError(f"Internal solver error: unknown function {f}.")  # pragma: no cover
+        return _apply_func(node[1], eval_ast(node[2], x))
+    if t == "func2":
+        return _apply_func2(node[1], eval_ast(node[2], x), eval_ast(node[3], x))
     if t == "bin":
         l, r = eval_ast(node[2], x), eval_ast(node[3], x)
         op = node[1]
@@ -849,23 +941,9 @@ def eval_ast2(node, x: float, y: float) -> float:
     if t == "neg":
         return -eval_ast2(node[1], x, y)
     if t == "func":
-        v = eval_ast2(node[2], x, y)
-        f = node[1]
-        if f == "sin":
-            return math.sin(v)
-        if f == "cos":
-            return math.cos(v)
-        if f == "tan":
-            return math.tan(v)
-        if f == "log":
-            return math.log(v)
-        if f == "sqrt":
-            return math.sqrt(v)
-        if f == "exp":
-            return math.exp(v)
-        if f == "abs":
-            return abs(v)
-        raise SolverError(f"Internal solver error: unknown function {f}.")  # pragma: no cover
+        return _apply_func(node[1], eval_ast2(node[2], x, y))
+    if t == "func2":
+        return _apply_func2(node[1], eval_ast2(node[2], x, y), eval_ast2(node[3], x, y))
     if t == "bin":
         l, r = eval_ast2(node[2], x, y), eval_ast2(node[3], x, y)
         op = node[1]

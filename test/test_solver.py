@@ -328,6 +328,22 @@ def test_fmt():
         ("y = 2(x+1)", "y = 2(x + 1)"),
         ("y = (x)", "y = x"),
         ("y = 1/(x-5)", "y = 1 / (x \u2212 5)"),
+        # extended function set (Sep 2026)
+        ("y = asin(x)", "y = asin(x)"),
+        ("y = acos(x)", "y = acos(x)"),
+        ("y = atan(x)", "y = atan(x)"),
+        ("y = sinh(x)", "y = sinh(x)"),
+        ("y = cosh(x)", "y = cosh(x)"),
+        ("y = tanh(x)", "y = tanh(x)"),
+        ("y = log10(x)", "y = log10(x)"),
+        ("y = log2(x)", "y = log2(x)"),
+        ("y = cbrt(x)", "y = cbrt(x)"),
+        ("y = floor(x)", "y = floor(x)"),
+        ("y = ceil(x)", "y = ceil(x)"),
+        ("y = round(x)", "y = round(x)"),
+        ("y = sign(x)", "y = sign(x)"),
+        ("y = atan2(x, 1)", "y = atan2(x, 1)"),
+        ("y = 2tanh(x)", "y = 2tanh(x)"),
     ],
 )
 def test_function_display(raw, display):
@@ -399,6 +415,109 @@ def test_function_errors(raw, needle):
     with pytest.raises(solver.SolverError) as exc:
         solver.solve_equation(raw)
     assert needle in str(exc.value)
+
+
+# --- extended function set (Sep 2026): inverses, hyperbolics, log10/log2,
+# --- cbrt, floor/ceil/round/sign, and the two-argument atan2 ---
+def _ys(raw, x_min, x_max, x_step: float = 1):
+    pts = solver.generate_points(raw, x_min=x_min, x_max=x_max, x_step=x_step)["branches"][0]["points"]
+    return [(x, y) for x, y in pts]
+
+
+def test_extended_asin_acos_domain_skipping():
+    # |x| > 1 is outside the domain — those samples are dropped, not plotted
+    # as NaN (the JS twin skips the same points via Math.asin -> NaN).
+    assert [x for x, _ in _ys("y = asin(x)", -3, 3)] == [-1, 0, 1]
+    assert [x for x, _ in _ys("y = acos(x)", -3, 3)] == [-1, 0, 1]
+    assert _ys("y = asin(x)", 0, 1)[-1][1] == pytest.approx(math.pi / 2)
+    assert _ys("y = acos(x)", 1, 1)[0][1] == pytest.approx(0.0)
+
+
+def test_extended_hyperbolics_and_atan():
+    assert _ys("y = sinh(x)", 0, 0)[0][1] == pytest.approx(0.0)
+    assert _ys("y = tanh(x)", 0, 0)[0][1] == pytest.approx(0.0)
+    assert _ys("y = cosh(x)", 0, 0)[0][1] == pytest.approx(1.0)
+    assert _ys("y = tanh(2)", 1, 1)[0][1] == pytest.approx(math.tanh(2))
+    assert _ys("y = atan(x)", 0, 0)[0][1] == pytest.approx(0.0)
+
+
+def test_extended_logs_and_cbrt():
+    assert [x for x, _ in _ys("y = log10(x)", -2, 3)] == [1, 2, 3]     # log10(0) dropped
+    assert [x for x, _ in _ys("y = log2(x)", -2, 3)] == [1, 2, 3]
+    assert _ys("y = log10(x)", 1000, 1000)[0][1] == pytest.approx(3.0)
+    assert _ys("y = log2(x)", 8, 8)[0][1] == pytest.approx(3.0)
+    # cbrt is the REAL cube root: negatives stay real (unlike x^(1/3))
+    assert _ys("y = cbrt(x)", -8, 8, 8)[0][1] == pytest.approx(-2.0)
+    assert _ys("y = cbrt(x)", -8, 8, 8)[-1][1] == pytest.approx(2.0)
+
+
+def test_extended_rounding_uses_js_semantics():
+    # Math.round (half up), NOT Python's banker's rounding: 0.5 -> 1 and
+    # 2.5 -> 3 in both solvers, else the twins disagree on x.5 samples.
+    assert _ys("y = round(x)", 0.5, 2.5, 0.5)[0][1] == pytest.approx(1.0)
+    assert _ys("y = round(x)", 0.5, 2.5, 0.5)[1][1] == pytest.approx(1.0)   # 1.0 -> 1
+    assert _ys("y = round(x)", 0.5, 2.5, 0.5)[-1][1] == pytest.approx(3.0)  # 2.5 -> 3
+    assert _ys("y = floor(x)", -1.2, 1.8, 1.5)[0][1] == pytest.approx(-2.0)
+    assert _ys("y = ceil(x)", -1.2, 1.8, 1.5)[0][1] == pytest.approx(-1.0)
+    assert _ys("y = sign(x)", -3, 4, 1)[0][1] == pytest.approx(-1.0)
+    assert _ys("y = sign(x)", -3, 4, 1)[3][1] == pytest.approx(0.0)
+    assert _ys("y = sign(x)", -3, 4, 1)[-1][1] == pytest.approx(1.0)
+
+
+def test_extended_atan2_two_arguments():
+    sol = solver.solve_equation("y = atan2(x, 1)")
+    assert sol["kind"] == "function"
+    assert sol["display"] == "y = atan2(x, 1)"
+    assert _ys("y = atan2(x, 1)", 1, 3)[0][1] == pytest.approx(math.atan2(1, 1))
+    # y inside either argument is unsolvable for y -> implicit fallback
+    assert solver.solve_equation("y = atan2(y, x)")["kind"] == "implicit"
+    assert solver.solve_equation("y = atan2(x, y)")["kind"] == "implicit"
+
+
+@pytest.mark.parametrize(
+    "raw,needle",
+    [
+        ("y = atan2(x)", "takes two arguments"),
+        ("y = atan2(x, 1, 2)", "Missing closing parenthesis"),
+        ("y = sin(x, 1)", "takes one argument"),
+        # A bare function name with no "(" is not a call at all — it falls
+        # through to the term parser, exactly like the pre-existing "y = sin".
+        ("y = tanh", "Cannot understand term"),
+        ("y = log10", "Cannot understand term"),
+        ("y = sin", "Cannot understand term"),
+    ],
+)
+def test_extended_function_arity_and_bare_name_errors(raw, needle):
+    with pytest.raises(solver.SolverError) as exc:
+        solver.solve_equation(raw)
+    assert needle in str(exc.value)
+
+
+def test_extended_tokenizer_keeps_old_meanings():
+    # The digit-carrying names (log10/log2/atan2) must not break the classic
+    # implicit-multiplication readings — regression guard for the tokenizer.
+    assert solver.solve_equation("y = x2")["kind"] == "implicit"      # x * 2
+    assert solver.solve_equation("y = xy")["kind"] == "implicit"      # x * y
+    assert solver.solve_equation("y = xx")["kind"] == "implicit"      # x * x
+    with pytest.raises(solver.SolverError, match="Unknown symbol"):
+        solver.solve_equation("y = (logish)")
+    # A two-character unknown name is NOT split into a known prefix + rest.
+    with pytest.raises(solver.SolverError, match="Unknown symbol"):
+        solver.solve_equation("y = (sinx)")
+
+
+def test_extended_functions_work_in_polar_mode():
+    sol = solver.solve_equation("r = 2tanh(θ)", polar=True)
+    assert sol["kind"] == "polar"
+    pts = solver.generate_points("r = 2tanh(θ)", mode="polar")["branches"][0]["points"]
+    assert pts[0][2] == pytest.approx(0.0)   # θ = 0
+    assert pts[0][3] == pytest.approx(0.0)   # r = 2·tanh(0) = 0
+
+
+def test_extended_functions_work_in_inequalities():
+    sol = solver.solve_equation("y > asin(x)")
+    assert sol["kind"] == "function"
+    assert sol["inequality"]["op"] == ">"
 
 
 # --- P3-2: inequality shading ---

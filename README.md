@@ -10,7 +10,8 @@ auto-derive an x range that covers their real domain (e.g. `x^2 + y^2 = 100`
 plots x = -10…10). Pass explicit `x_min`/`x_max` to override.
 
 Function formulas — `y = sin(x)`, `y = e^x`, `y = 1/(x-5)` — plot through a
-small expression solver supporting `sin cos tan log sqrt exp abs`, the
+small expression solver supporting `sin cos tan asin acos atan atan2(y,x)
+sinh cosh tanh log ln log10 log2 sqrt cbrt exp abs floor ceil round sign`, the
 constants `e` and `pi`, parentheses and `+ - * / ^`. Domain holes and
 vertical asymptotes are skipped (the polyline breaks across an asymptote),
 so `tan` and reciprocal functions render cleanly.
@@ -27,11 +28,20 @@ grid on + axis off gives an unlabelled grid and both off gives curves only. Ever
 12, click a chip to re-plot, ✕ clear).
 
 **Plot up to 5 formulas at once** ("+ Add formula" adds an input row). Each
-row owns its curve's **colour** — the device picker, a **hex box** taking any
+row owns its curve's **colours** — a device picker, a **hex box** taking any
 opaque CSS colour (`#f80`, `#ff8800`, `rgb(… )`, `hsl(…)`, `tomato`; Enter or
 blur applies it), and a **▾ palette** of 32 built-in swatches, because a
-platform's colour dialog (Android's especially) only offers a small fixed set —
-plus **line opacity** (a percent field, 0–100, default 100) and two
+platform's colour dialog (Android's especially) only offers a small fixed set.
+Each row has **two** colour parts — start **→** end — and the line fades from
+the first into the second along the curve (the same colour on both = a solid
+line). Every row also has a **ƒ button** that inserts a supported function at
+the caret of that row's formula field — one tap opens the function menu
+(the list is built from the same array the solver uses), the chip inserts
+`sin(`, `log10(`, `atan2(` … and the caret lands *inside* the new parentheses,
+with a **Constants** group (`pi`, `e`, `θ`) inserted bare. Nothing has to be
+memorised or spelled from memory; the inserted text goes in exactly where the
+caret was, so `y = 2*` + `sqrt(` becomes `y = 2*sqrt(` ready for its argument.
+Each row also has **line opacity** (a percent field, 0–100, default 100) and two
 presentation transforms: its own **centre**
 (x/y, default 0,0 — the point on the graph where that curve's own (0,0) sits)
 and its own **rotation** (∠, degrees about that centre, default 0, positive =
@@ -175,10 +185,17 @@ Any linear equation, and simple polynomials in `x` (linear in `y`):
   trig curves. Function formulas auto-sample at a "nice" step (~400 points)
   so `sin`, `tan`, etc. render smoothly without a manual step.
 - Formulas containing **functions, parentheses or `e`/`pi`** are solved as
-  `y = f(x)` by an expression solver: `sin cos tan log ln sqrt exp abs`,
+  `y = f(x)` by an expression solver: `sin cos tan asin acos atan atan2(y,x)
+  sinh cosh tanh log ln log10 log2 sqrt cbrt exp abs floor ceil round sign`,
   constants `e` and `pi`, operators `+ - * / ^` (implicit `2x`, `2sin(x)`),
   and any equation linear in `y` (`2y = sin(x)`, `y*sin(x) = 1`). `log` is
-  the natural logarithm. Points outside a function's domain are skipped.
+  the natural logarithm, `cbrt` the real cube root (`cbrt(-8) = -2`),
+  `round` follows JavaScript's half-up rule, and `atan2(y, x)` is the only
+  two-argument call. Points outside a function's domain (`log10(0)`,
+  `asin(2)`) are skipped.
+- **Gradient lines**: every row has TWO colours (start → end, `?color=` /
+  `?color2=`). The stroke fades from the first into the second along the
+  curve; identical colours (the default) draw a solid line.
 - **Polar mode** (`?mode=polar`, polar tab): formulas take the form
   `r = f(θ)` — linear in `r`. Use `θ` or `theta` for the angle
   (e.g. `r = 2θ`, `r = 3*sin(2θ)`, `r = e^(θ/10)`). `x_min`/`x_max`/`x_step`
@@ -264,6 +281,9 @@ P3 = bigger / probably not worth it.
 
 ### P2 — capability upgrades
 - [x] General functions: `sin`, `cos`, `tan`, `log`, `sqrt`, `exp`, `abs` (real grapher territory)
+- [x] Extended function set: `asin`/`acos`/`atan`/`atan2(y,x)`, `sinh`/`cosh`/`tanh`, `log10`/`log2`/`ln`, `cbrt`, `floor`/`ceil`/`round`/`sign` — both solvers + parity corpus
+- [x] Gradient line colours: each row has a start → end colour pair (`?color=` / `?color2=`), stroked with a canvas gradient along the curve
+- [x] Function insert menu (ƒ button per row): supported functions + constants, inserted at the caret of that row's formula field
 - [x] Multiple formulas on one graph with legend (batch `/api/points` or comma-separated input)
 - [x] Polar mode in a second tab (`?mode=polar&formula=r+%3D+2%CE%B8`; `r = f(θ)` with `θ`/`theta` for the angle, `x_min`/`x_max`/`x_step` bound θ; the points table shows θ and r in polar mode)
 - [x] History & samples in collapsible accordions (closed by default; open/closed state remembered per tab — `xygh:open:history:cartesian` / `xygh:open:samples:polar`, etc.)

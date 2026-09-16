@@ -13,9 +13,9 @@ const sandbox = { console, Math, Number, String, Object, Set, Map, Array, isFini
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 // The guard `typeof document !== 'undefined'` prevents DOM code from running here.
-vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches, evalAst: evalAst, astStr: astStr };', sandbox);
+vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches, evalAst: evalAst, astStr: astStr, applyFunc: applyFunc, applyFunc2: applyFunc2, colorFill: colorFill, colorWithAlpha: colorWithAlpha, spliceAtCaret: spliceAtCaret, FN_HELP: FN_HELP, FN_CONSTS: FN_CONSTS, FUNCTIONS: FUNCTIONS, TWO_ARG_FUNCTIONS: TWO_ARG_FUNCTIONS };', sandbox);
 
-const { solveEquation, evalPoly, fmt, parseTerm, buildBranches, evalAst, astStr } = sandbox.__api;
+const { solveEquation, evalPoly, fmt, parseTerm, buildBranches, evalAst, astStr, applyFunc, applyFunc2, colorFill, colorWithAlpha, spliceAtCaret, FN_HELP, FN_CONSTS, FUNCTIONS, TWO_ARG_FUNCTIONS } = sandbox.__api;
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -223,6 +223,97 @@ check('y + sin(x) = y + 2 is implicit', solveEquation('y + sin(x) = y + 2').kind
   const b = buildBranches(solveEquation('y = sqrt(x)'), -10, -1);
   check('sqrt no real y', b.error || '', 'No real y for the given x range.');
 }
+
+// --- extended function set (Sep 2026): inverses, hyperbolics, log10/log2,
+// --- cbrt, floor/ceil/round/sign, the two-argument atan2, and the gradient
+// --- colour helper used by the legend/table dots ---
+check('asin display', solveEquation('y = asin(x)').display, 'y = asin(x)');
+check('acos display', solveEquation('y = acos(x)').display, 'y = acos(x)');
+check('atan display', solveEquation('y = atan(x)').display, 'y = atan(x)');
+check('sinh display', solveEquation('y = sinh(x)').display, 'y = sinh(x)');
+check('cosh display', solveEquation('y = cosh(x)').display, 'y = cosh(x)');
+check('tanh display', solveEquation('y = tanh(x)').display, 'y = tanh(x)');
+check('log10 display', solveEquation('y = log10(x)').display, 'y = log10(x)');
+check('log2 display', solveEquation('y = log2(x)').display, 'y = log2(x)');
+check('cbrt display', solveEquation('y = cbrt(x)').display, 'y = cbrt(x)');
+check('floor display', solveEquation('y = floor(x)').display, 'y = floor(x)');
+check('ceil display', solveEquation('y = ceil(x)').display, 'y = ceil(x)');
+check('round display', solveEquation('y = round(x)').display, 'y = round(x)');
+check('sign display', solveEquation('y = sign(x)').display, 'y = sign(x)');
+check('atan2 display', solveEquation('y = atan2(x, 1)').display, 'y = atan2(x, 1)');
+check('2tanh display', solveEquation('y = 2tanh(x)').display, 'y = 2tanh(x)');
+{
+  const b = buildBranches(solveEquation('y = asin(x)'), -3, 3);
+  check('asin domain skips', b.branches[0].points.map(p => p.x), [-1, 0, 1]);
+}
+{
+  const b = buildBranches(solveEquation('y = acos(x)'), -3, 3);
+  check('acos domain skips', b.branches[0].points.map(p => p.x), [-1, 0, 1]);
+}
+{
+  const b = buildBranches(solveEquation('y = log10(x)'), -2, 3);
+  check('log10 domain skips', b.branches[0].points.map(p => p.x), [1, 2, 3]);
+}
+{
+  const b = buildBranches(solveEquation('y = log2(x)'), 8, 8);
+  check('log2 value', b.branches[0].points.map(p => p.y), [3]);
+}
+{
+  const b = buildBranches(solveEquation('y = cbrt(x)'), -8, 8, 8);
+  check('cbrt keeps negatives real', b.branches[0].points.map(p => p.y), [-2, 0, 2]);
+}
+{
+  const b = buildBranches(solveEquation('y = round(x)'), 0.5, 2.5, 0.5);
+  check('round is half-up (Math.round)', b.branches[0].points.map(p => p.y), [1, 1, 2, 2, 3]);
+}
+{
+  const b = buildBranches(solveEquation('y = floor(x)'), -1.2, 1.8, 1.5);
+  check('floor values', b.branches[0].points.map(p => p.y), [-2, 0, 1]);
+}
+{
+  const b = buildBranches(solveEquation('y = ceil(x)'), -1.2, 1.8, 1.5);
+  check('ceil values', b.branches[0].points.map(p => p.y), [-1, 1, 2]);
+}
+{
+  const b = buildBranches(solveEquation('y = sign(x)'), -3, 4, 1);
+  check('sign values', b.branches[0].points.map(p => p.y), [-1, -1, -1, 0, 1, 1, 1, 1]);
+}
+{
+  const b = buildBranches(solveEquation('y = atan2(x, 1)'), 1, 3);
+  check('atan2(y=1, x=1) = pi/4', Math.abs(b.branches[0].points[0].y - Math.PI / 4) < 1e-12, true);
+}
+check('atan2 with y is implicit', solveEquation('y = atan2(y, x)').kind, 'implicit');
+checkErr('atan2 one arg', 'y = atan2(x)', 'takes two arguments');
+checkErr('atan2 three args', 'y = atan2(x, 1, 2)', 'Missing closing parenthesis');
+checkErr('sin two args', 'y = sin(x, 1)', 'takes one argument');
+check('x2 still x*2', solveEquation('y = x2').kind, 'implicit');
+// Unknown names stay whole (never split into a known prefix + rest).
+checkErr('unknown word kept whole', 'y = (logish)', 'Unknown symbol');
+checkErr('unknown name kept whole', 'y = (sinx)', 'Unknown symbol');
+check('applyFunc log10', applyFunc('log10', 1000), 3);
+check('applyFunc cbrt', applyFunc('cbrt', -8), -2);
+check('applyFunc2 atan2', Math.abs(applyFunc2('atan2', 1, 1) - Math.PI / 4) < 1e-12, true);
+check('flat fill has no gradient', colorFill('#ff0000', '#ff0000', 1), 'rgba(255,0,0,1)');
+check('missing end colour = flat', colorFill('#ff0000', undefined, 0.5), 'rgba(255,0,0,0.5)');
+check('gradient fill', colorFill('#ff0000', '#0000ff', 1),
+      'linear-gradient(90deg, rgba(255,0,0,1), rgba(0,0,255,1))');
+
+// --- function menu: pure caret-splice helper + menu/tooltip lockstep ---
+check('splice at caret mid-text', spliceAtCaret('y = 6', 4, 4, 'sin('),
+      { value: 'y = sin(6', caret: 8 });
+check('splice replaces a selection', spliceAtCaret('y = abc', 4, 7, 'x'),
+      { value: 'y = x', caret: 5 });
+check('caret lands inside the new parens', spliceAtCaret('y = ', 4, 4, 'log10(').caret, 10);
+check('splice appends when there is no caret', spliceAtCaret('y = 2*', undefined, undefined, 'cos('),
+      { value: 'y = 2*cos(', caret: 10 });
+check('splice clamps an out-of-range caret', spliceAtCaret('y = x', 99, 99, 'pi'),
+      { value: 'y = xpi', caret: 7 });
+check('splice tolerates an empty field', spliceAtCaret('', 0, 0, 'sqrt('),
+      { value: 'sqrt(', caret: 5 });
+check('every function has a menu tooltip', FUNCTIONS.every(n => typeof FN_HELP[n] === 'string'), true);
+check('no stale menu tooltips', Object.keys(FN_HELP).every(n => FUNCTIONS.indexOf(n) !== -1), true);
+check('constants offered in the menu', FN_CONSTS.map(p => p[0]), ['pi', 'e', '\u03b8']);
+check('atan2 advertised as two-argument', TWO_ARG_FUNCTIONS.indexOf('atan2') !== -1, true);
 
 // --- polar mode: r = f(θ) ---
 {

@@ -257,11 +257,94 @@ def test_index_renders_hex_colour_box_and_palette_button_per_formula():
 
 
 def test_index_hex_box_mirrors_the_initial_colour():
-    # The hex box shows the row's prefilled colour, so a share URL's color=
-    # param is editable text as well as a swatch.
+    # The hex boxes show the row's prefilled colours, so a share URL's color=
+    # param is editable text as well as a swatch. Each row has TWO colour parts
+    # (gradient start → end), and the end colour defaults to the start colour,
+    # so a single color= param fills both swatches and both hex boxes.
     r = client.get("/", params=[("formula", "y = x"), ("color", "#ff00aa")])
     assert r.status_code == 200
-    assert r.text.count('value="#ff00aa"') == 2   # device swatch + hex box
+    assert r.text.count('value="#ff00aa"') == 4   # 2 swatches + 2 hex boxes
+
+
+def test_index_renders_gradient_end_colour_controls_per_formula():
+    # Every row carries a second colour part (gradient end) with its own device
+    # swatch, hex/text box and palette button, plus the "→" between the parts.
+    r = client.get("/", params=[("formula", "y = x"), ("formula", "y = 2x")])
+    assert r.status_code == 200
+    assert r.text.count('class="color2-pick"') == 2
+    assert r.text.count('class="hex2-pick"') == 2
+    assert r.text.count('class="pal2-btn"') == 2
+    assert r.text.count('class="color-part"') == 4        # two per row
+    assert r.text.count('class="color-arrow"') == 2
+
+
+def test_index_prefills_color2_params_in_order():
+    r = client.get(
+        "/",
+        params=[("formula", "y = x"), ("formula", "y = 2x"),
+                ("color", "#ff00aa"), ("color", "#123456"),
+                ("color2", "#00ff00"), ("color2", "#0000ff")],
+    )
+    assert r.status_code == 200
+    assert r.text.count('class="color2-pick" value="#00ff00"') == 1
+    assert r.text.count('class="color2-pick" value="#0000ff"') == 1
+
+
+def test_index_color2_params_fallback_to_the_row_colour():
+    # A missing/invalid gradient end colour falls back to that row's FIRST
+    # colour — a solid line, never the palette default (that would silently
+    # paint a gradient the user never asked for).
+    r = client.get(
+        "/",
+        params=[("formula", "y = x"), ("formula", "y = 2x"),
+                ("color", "#ff00aa"), ("color", "#123456"),
+                ("color2", "not-a-colour")],
+    )
+    assert r.status_code == 200
+    assert r.text.count('class="color2-pick" value="#ff00aa"') == 1   # row 0 -> its colour
+    assert r.text.count('class="color2-pick" value="#123456"') == 1   # row 1 -> padded
+    assert 'class="color2-pick" value="#dc2626"' not in r.text
+
+
+def test_index_color2_param_never_injects_markup():
+    r = client.get("/", params=[("formula", "y = x"), ("color2", '"><script>alert(1)</script>')])
+    assert r.status_code == 200
+    assert "<script>alert(1)</script>" not in r.text
+    assert 'class="color2-pick" value="#dc2626"' in r.text   # falls back to row colour
+
+
+def test_index_renders_function_menu_button_per_formula():
+    # Every row has a ƒ button that opens the shared function menu, which
+    # inserts the chosen function into THAT row's formula field at the caret.
+    r = client.get("/", params=[("formula", "y = x"), ("formula", "y = 2x")])
+    assert r.status_code == 200
+    assert r.text.count('class="fn-btn"') == 2
+    assert 'id="fnPop"' in r.text
+    assert 'id="fnGrid"' in r.text and 'id="fnConsts"' in r.text
+
+
+def test_index_function_menu_covers_every_function():
+    # The menu (and every tooltip) is built in the template from the template's
+    # own FUNCTIONS array. Both must match the server's solver exactly, or the
+    # drop-down offers a function the API rejects (or hides a supported one).
+    import re
+
+    from app.solver import FUNCTIONS, TWO_ARG_FUNCTIONS
+
+    r = client.get("/")
+    m = re.search(r"const FUNCTIONS = \[([^\]]+)\]", r.text)
+    assert m, "FUNCTIONS not found in template"
+    js_names = re.findall(r"'([a-z0-9]+)'", m.group(1))
+    assert sorted(js_names) == sorted(FUNCTIONS)
+
+    block = re.search(r"const FN_HELP = \{(.*?)\n\};", r.text, re.S)
+    assert block, "FN_HELP not found in template"
+    help_keys = re.findall(r"([a-z][a-z0-9]*)\s*:", block.group(1))
+    assert sorted(help_keys) == sorted(js_names), "every function needs a tooltip entry"
+
+    two = re.search(r"const TWO_ARG_FUNCTIONS = \[([^\]]*)\]", r.text)
+    assert two, "TWO_ARG_FUNCTIONS not found in template"
+    assert sorted(re.findall(r"'([a-z0-9]+)'", two.group(1))) == sorted(TWO_ARG_FUNCTIONS)
 
 
 def test_index_renders_palette_popover_with_presets():
@@ -543,11 +626,18 @@ def test_metrics_endpoint():
 
 
 def test_health_reports_version_and_uptime():
+    import re
+
+    from app.main import app
+
     r = client.get("/health")
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert body["version"] == "0.8.1"
+    # Compared against the app's own version (not a literal) so a release bump
+    # never turns into a false test failure.
+    assert body["version"] == app.version
+    assert re.fullmatch(r"\d+\.\d+\.\d+", body["version"])
     assert body["uptime_s"] >= 0
 
 

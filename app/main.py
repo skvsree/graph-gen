@@ -21,7 +21,7 @@ from . import solver
 
 log = logging.getLogger("xy-graph-gen")
 
-app = FastAPI(title="xy-graph-gen", version="0.8.1")
+app = FastAPI(title="xy-graph-gen", version="0.9.0")
 
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
@@ -169,6 +169,22 @@ def _clean_colors(raw: list[str], n: int) -> list[str]:
     return colors
 
 
+def _clean_end_colors(raw: list[str], n: int, colors: list[str]) -> list[str]:
+    """Validate repeated `color2` params (gradient END colour, hex #rrggbb).
+
+    A missing/invalid entry falls back to that row's FIRST colour — i.e. a
+    solid line, the pre-gradient behaviour — so a `color2` param can never
+    inject markup into the page.
+    """
+    ends = []
+    for i in range(n):
+        c = raw[i].strip().lower() if i < len(raw) else ""
+        if not _COLOR_RE.fullmatch(c):
+            c = colors[i] if i < len(colors) else CURVE_PALETTE[i % len(CURVE_PALETTE)]
+        ends.append(c)
+    return ends
+
+
 def _clean_opacities(raw: list[str], n: int) -> list[int]:
     """Validate repeated `op` params (percent 0..100) and pad to length n.
 
@@ -287,6 +303,7 @@ def index(
     request: Request,
     formula: list[str] = Query(default=[DEFAULT_FORMULA]),
     color: list[str] = Query(default=[]),
+    color2: list[str] = Query(default=[]),
     op: list[str] = Query(default=[]),
     cx: list[str] = Query(default=[]),
     cy: list[str] = Query(default=[]),
@@ -301,8 +318,10 @@ def index(
     Repeated ``?formula=…&formula=…`` params pre-fill multiple formula rows
     (capped at MAX_FORMULAS for rendering). ``mode`` selects the tab
     (``cartesian`` or ``polar``) and is kept in the shareable URL. Optional
-    repeated ``?color=#rrggbb`` params pre-fill each row's colour picker,
-    repeated ``?op=…`` params pre-fill each row's line opacity (percent
+    repeated ``?color=#rrggbb`` params pre-fill each row's colour picker and
+    repeated ``?color2=#rrggbb`` params pre-fill its gradient END colour
+    (default = that row's first colour, i.e. a solid line), repeated
+    ``?op=…`` params pre-fill each row's line opacity (percent
     0..100, default 100), and repeated ``?cx=…&cy=…`` params pre-fill each
     row's centre offset (default 0,0). Repeated ``?rot=`` params pre-fill
     each row's rotation in degrees about that centre (default 0).
@@ -311,6 +330,7 @@ def index(
     _check_mode(mode)
     formulas = _clean_formulas(formula) or [DEFAULT_FORMULA]
     colors = _clean_colors(color, len(formulas))
+    end_colors = _clean_end_colors(color2, len(formulas), colors)
     opacities = _clean_opacities(op, len(formulas))
     centers = _clean_centers(cx, cy, len(formulas))
     rotations = _clean_rotations(rot, len(formulas))
@@ -323,6 +343,7 @@ def index(
         context={
             "formulas": formulas[:MAX_FORMULAS],
             "colors": colors[:MAX_FORMULAS],
+            "colors2": end_colors[:MAX_FORMULAS],
             "opacities": opacities[:MAX_FORMULAS],
             "centers": centers[:MAX_FORMULAS],
             "rotations": rotations[:MAX_FORMULAS],

@@ -41,7 +41,10 @@ the caret of that row's formula field — one tap opens the function menu
 with a **Constants** group (`pi`, `e`, `θ`) inserted bare. Nothing has to be
 memorised or spelled from memory; the inserted text goes in exactly where the
 caret was, so `y = 2*` + `sqrt(` becomes `y = 2*sqrt(` ready for its argument.
-Each row also has **line opacity** (a percent field, 0–100, default 100) and two
+Each row also has **line opacity** (a percent field, 0–100, default 100),
+**line thickness** (`px`, 0.5–12, default 2.5) and a **brush** menu (solid,
+dashed, dotted, dash-dot, long dash — the dash pattern scales with the
+thickness, so a 8px dashed line stays dashed instead of turning into dots) and two
 presentation transforms: its own **centre**
 (x/y, default 0,0 — the point on the graph where that curve's own (0,0) sits)
 and its own **rotation** (∠, degrees about that centre, default 0, positive =
@@ -284,6 +287,7 @@ P3 = bigger / probably not worth it.
 - [x] Extended function set: `asin`/`acos`/`atan`/`atan2(y,x)`, `sinh`/`cosh`/`tanh`, `log10`/`log2`/`ln`, `cbrt`, `floor`/`ceil`/`round`/`sign` — both solvers + parity corpus
 - [x] Gradient line colours: each row has a start → end colour pair (`?color=` / `?color2=`), stroked with a canvas gradient along the curve
 - [x] Function insert menu (ƒ button per row): supported functions + constants, inserted at the caret of that row's formula field
+- [x] Per-row line thickness (`?w=`, 0.5–12px) and brush styles (`?brush=`: solid, dashed, dotted, dash-dot, long dash) with width-scaled dash patterns
 - [x] Multiple formulas on one graph with legend (batch `/api/points` or comma-separated input)
 - [x] Polar mode in a second tab (`?mode=polar&formula=r+%3D+2%CE%B8`; `r = f(θ)` with `θ`/`theta` for the angle, `x_min`/`x_max`/`x_step` bound θ; the points table shows θ and r in polar mode)
 - [x] History & samples in collapsible accordions (closed by default; open/closed state remembered per tab — `xygh:open:history:cartesian` / `xygh:open:samples:polar`, etc.)

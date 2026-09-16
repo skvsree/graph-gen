@@ -71,6 +71,14 @@
   .ctr-axis { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; }
   .ctr-lbl { font-size: 10.5px; line-height: 1; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
   .ctr input[type=number] { width: 64px; padding: 8px 6px; text-align: center; }
+  /* Per-row brush (line style) menu. */
+  .form select.brush-pick {
+    width: 96px; padding: 8px 6px; font-size: 13px; font-family: inherit;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--card);
+    color: var(--fg); cursor: pointer;
+  }
+  .form select.brush-pick:focus { outline: 2px solid var(--input-focus); border-color: #2563eb; }
+  .brush-ctr .ctr-lbl { text-transform: none; font-size: 11px; }
   /* Per-formula rotation (degrees about the curve's own centre, default 0). */
   .rot-ctr .ctr-lbl { font-size: 13px; text-transform: none; }
   .ctr input[type=number]::-webkit-inner-spin-button { opacity: 0.4; }
@@ -263,7 +271,7 @@
 <div class="wrap">
   <header>
     <h1>xy-graph-gen</h1>
-    <p>Enter an equation in x and y — it is solved for y and plotted for x = 1 … 100, with (0,0) at the centre of the graph. Functions: <code>sin cos tan asin acos atan atan2(y,x) sinh cosh tanh log ln log10 log2 sqrt cbrt exp abs floor ceil round sign</code> (+ <code>e</code>, <code>pi</code>). Each row takes two colours — the line fades from the first into the second. Drag to pan, scroll or pinch to zoom, double-click to reset.</p>
+    <p>Enter an equation in x and y — it is solved for y and plotted for x = 1 … 100, with (0,0) at the centre of the graph. Functions: <code>sin cos tan asin acos atan atan2(y,x) sinh cosh tanh log ln log10 log2 sqrt cbrt exp abs floor ceil round sign</code> (+ <code>e</code>, <code>pi</code>). Each row takes two colours — the line fades from the first into the second — plus its own thickness (<code>px</code>) and pen style (<code>brush</code>: solid, dashed, dotted, dash-dot, long dash). Drag to pan, scroll or pinch to zoom, double-click to reset.</p>
   </header>
 
   <div class="tabs" id="tabs">
@@ -295,6 +303,21 @@
           <span class="ctr-axis">
             <label class="ctr-lbl" for="op{{ loop.index0 }}">%</label>
             <input type="number" class="opacity-pick" id="op{{ loop.index0 }}" value="{{ opacities[loop.index0] }}" placeholder="100" min="0" max="100" step="5">
+          </span>
+        </span>
+        <span class="ctr w-ctr" title="This formula's line thickness in pixels (0.5–12, default 2.5)">
+          <span class="ctr-axis">
+            <label class="ctr-lbl" for="w{{ loop.index0 }}">px</label>
+            <input type="number" class="width-pick" id="w{{ loop.index0 }}" value="{{ widths[loop.index0] }}" placeholder="2.5" min="0.5" max="12" step="0.5">
+          </span>
+        </span>
+        {% set sel = brushes[loop.index0] %}
+        <span class="ctr brush-ctr" title="This formula's line style — solid, dashed, dotted, dash-dot or long dash">
+          <span class="ctr-axis">
+            <label class="ctr-lbl" for="brush{{ loop.index0 }}">brush</label>
+            <select class="brush-pick" id="brush{{ loop.index0 }}">
+              {% for value, label in brush_options %}<option value="{{ value }}"{% if value == sel %} selected{% endif %}>{{ label }}</option>{% endfor %}
+            </select>
           </span>
         </span>
         <span class="ctr" title="This formula's own centre (default 0,0) — the point on the graph where its (0,0) sits; every point of the curve is shifted by this offset">
@@ -1645,15 +1668,21 @@ function draw(curves) {
     const curveAlpha = opToAlpha(curve.opacity);
     const curveColor = colorWithAlpha(curve.color, curveAlpha);
     const flat = !(curve.color2 && curve.color2 !== curve.color);
+    const curveWidth = curve.width || DEFAULT_STROKE_WIDTH;
+    const curveBrush = curve.brush || DEFAULT_BRUSH;
     curve.branches.forEach(function (br) {
       if (!br.points.length) return;
       const paint = flat
         ? curveColor
         : branchGradient(ctx, br.points, curve.color, curve.color2, curveAlpha, X, Y);
       ctx.strokeStyle = paint;
-      ctx.lineWidth = 2.5;
+      ctx.lineWidth = curveWidth;
       ctx.lineJoin = 'round';
-      ctx.lineCap = 'round';
+      // Line style is per curve and re-set for every branch: ctx.setLineDash
+      // is sticky, so leaving a pattern on would leak into the next curve
+      // (and into the asymptote-break segments).
+      ctx.lineCap = brushCap(curveBrush);
+      ctx.setLineDash(brushDash(curveBrush, curveWidth));
       ctx.beginPath();
       let prevX = null, prevY = null;
       for (let i = 0; i < br.points.length; i++) {
@@ -1664,6 +1693,7 @@ function draw(curves) {
         prevX = px; prevY = py;
       }
       ctx.stroke();
+      ctx.setLineDash([]);   // never leak the pattern into anything else
 
       // Point markers — only when the unit spacing is wide enough that they
       // don't merge into a solid ribbon.
@@ -2218,6 +2248,73 @@ function opNum(v) {
   return Math.min(100, Math.max(0, n));
 }
 
+// Per-row line thickness, in CSS pixels. Mirrors DEFAULT_STROKE_WIDTH /
+// MIN_STROKE_WIDTH / MAX_STROKE_WIDTH in app/main.py.
+const DEFAULT_STROKE_WIDTH = 2.5;
+const MIN_STROKE_WIDTH = 0.5;
+const MAX_STROKE_WIDTH = 12;
+
+// Line styles offered per row, in menu order — mirrors BRUSH_LABELS in
+// app/main.py (kept in lockstep by test_template_brushes_match_server).
+const BRUSH_OPTIONS = [
+  ['solid', 'Solid'],
+  ['dashed', 'Dashed'],
+  ['dotted', 'Dotted'],
+  ['dashdot', 'Dash-dot'],
+  ['longdash', 'Long dash'],
+];
+const DEFAULT_BRUSH = 'solid';
+
+// Canvas dash pattern for a brush, in pixels, scaled by the stroke width so a
+// dashed 8px line stays a dashed 8px line instead of collapsing into a dotted
+// one. A ZERO-LENGTH dash renders as a dot under round caps — that is how
+// "dotted" (and the dot of "dash-dot") is drawn. Pure, so the node suite can
+// cover it without a canvas.
+function brushDash(brush, width) {
+  const n = Number(width);
+  const w = Math.max(MIN_STROKE_WIDTH, isFinite(n) && n > 0 ? n : DEFAULT_STROKE_WIDTH);
+  const u = Math.max(1, w);
+  if (brush === 'dashed') return [3 * u, 2 * u];
+  if (brush === 'dotted') return [0.01, 2.2 * u];
+  if (brush === 'dashdot') return [3.5 * u, 2 * u, 0.01, 2 * u];
+  if (brush === 'longdash') return [7 * u, 3 * u];
+  return [];                                    // solid
+}
+
+// Round caps keep solid lines smooth and are REQUIRED by the dotted patterns
+// (a zero-length dash with butt caps paints nothing at all).
+function brushCap(brush) {
+  return (brush === 'dashed' || brush === 'longdash') ? 'butt' : 'round';
+}
+
+function brushLabel(brush) {
+  for (let i = 0; i < BRUSH_OPTIONS.length; i++) {
+    if (BRUSH_OPTIONS[i][0] === brush) return BRUSH_OPTIONS[i][1];
+  }
+  return brush ? String(brush) : '';
+}
+
+// Parse a thickness input's value (px). Blank/invalid -> the default; anything
+// outside the range clamps into it (the number input already blocks typing
+// out-of-range values, so this is the share-URL / pasted-value path).
+function strokeNum(v) {
+  const t = String(v == null ? '' : v).trim();
+  if (t === '') return DEFAULT_STROKE_WIDTH;
+  const n = parseFloat(t);
+  if (!isFinite(n) || n <= 0) return DEFAULT_STROKE_WIDTH;
+  return Math.min(MAX_STROKE_WIDTH, Math.max(MIN_STROKE_WIDTH, n));
+}
+
+// Parse a row's brush select. Unknown/missing -> solid.
+function brushOf(row) {
+  const sel = row.querySelector('.brush-pick');
+  const v = sel ? String(sel.value) : '';
+  for (let i = 0; i < BRUSH_OPTIONS.length; i++) {
+    if (BRUSH_OPTIONS[i][0] === v) return v;
+  }
+  return DEFAULT_BRUSH;
+}
+
 // The per-row "curve specs" in row order, deduped on formula + centre +
 // rotation (identical rows collapse; the same formula at a different centre
 // or angle is a separate curve). Every downstream list — formulas, colours,
@@ -2243,7 +2340,9 @@ function collectSpecs() {
     if (seen[key]) return;
     seen[key] = true;
     specs.push({ formula: f, cx: cx, cy: cy, rot: rot, color: color, color2: color2,
-                 op: opNum(row.querySelector('.opacity-pick').value), key: key });
+                 op: opNum(row.querySelector('.opacity-pick').value),
+                 w: strokeNum(row.querySelector('.width-pick') ? row.querySelector('.width-pick').value : ''),
+                 brush: brushOf(row), key: key });
   });
   return specs;
 }
@@ -2271,7 +2370,7 @@ const MAX_ROWS = 5;
 // ATTRIBUTES (the server-rendered values), NOT anything typed since, so each
 // field's live .value has to be copied explicitly.
 const ROW_FIELDS = ['.formula-input', '.color-pick', '.hex-pick', '.color2-pick', '.hex2-pick',
-                    '.opacity-pick', '.ctr-x', '.ctr-y', '.rot-pick'];
+                    '.opacity-pick', '.width-pick', '.brush-pick', '.ctr-x', '.ctr-y', '.rot-pick'];
 
 // Icons built in JS mirror the inline SVGs in the template (same .ico classes,
 // so they inherit the same stroke/currentColor rules).
@@ -2414,6 +2513,48 @@ function addFormulaRow(value) {
   opAxis.appendChild(opLbl);
   opAxis.appendChild(op);
   opWrap.appendChild(opAxis);
+  // Line thickness (px, 0.5–12, default 2.5) — mirrors the server-rendered
+  // `.width-pick`. Live: a thickness change restyles the curve, no replot.
+  const wWrap = document.createElement('span');
+  wWrap.className = 'ctr w-ctr';
+  wWrap.title = "This formula's line thickness in pixels (0.5–12, default 2.5)";
+  const wAxis = document.createElement('span');
+  wAxis.className = 'ctr-axis';
+  const wLbl = document.createElement('label');
+  wLbl.className = 'ctr-lbl';
+  wLbl.textContent = 'px';
+  const wIn = document.createElement('input');
+  wIn.type = 'number';
+  wIn.className = 'width-pick';
+  wIn.placeholder = '2.5';
+  wIn.min = '0.5';
+  wIn.max = '12';
+  wIn.step = '0.5';
+  wIn.value = String(DEFAULT_STROKE_WIDTH);
+  wAxis.appendChild(wLbl);
+  wAxis.appendChild(wIn);
+  wWrap.appendChild(wAxis);
+  // Line style (brush) — mirrors the server-rendered `.brush-pick`.
+  const brWrap = document.createElement('span');
+  brWrap.className = 'ctr brush-ctr';
+  brWrap.title = "This formula's line style — solid, dashed, dotted, dash-dot or long dash";
+  const brAxis = document.createElement('span');
+  brAxis.className = 'ctr-axis';
+  const brLbl = document.createElement('label');
+  brLbl.className = 'ctr-lbl';
+  brLbl.textContent = 'brush';
+  const brSel = document.createElement('select');
+  brSel.className = 'brush-pick';
+  BRUSH_OPTIONS.forEach(function (pair) {
+    const o = document.createElement('option');
+    o.value = pair[0];
+    o.textContent = pair[1];
+    if (pair[0] === DEFAULT_BRUSH) o.selected = true;
+    brSel.appendChild(o);
+  });
+  brAxis.appendChild(brLbl);
+  brAxis.appendChild(brSel);
+  brWrap.appendChild(brAxis);
   // Centre offset fields (default 0,0) — where this curve's own (0,0) sits.
   const ctr = document.createElement('span');
   ctr.className = 'ctr';
@@ -2477,6 +2618,8 @@ function addFormulaRow(value) {
   row.appendChild(fnb);
   row.appendChild(cell);
   row.appendChild(opWrap);
+  row.appendChild(wWrap);
+  row.appendChild(brWrap);
   row.appendChild(ctr);
   row.appendChild(rot);
   row.appendChild(dup);
@@ -2502,7 +2645,8 @@ function onRowsChanged() {
 // the <label for> pairs and the #formula fallback, but duplicated ids are
 // invalid HTML and would break both).
 function reindexRows() {
-  const PREFIX = { 'opacity-pick': 'op', 'ctr-x': 'ctrX', 'ctr-y': 'ctrY', 'rot-pick': 'rot' };
+  const PREFIX = { 'opacity-pick': 'op', 'width-pick': 'w', 'brush-pick': 'brush',
+                   'ctr-x': 'ctrX', 'ctr-y': 'ctrY', 'rot-pick': 'rot' };
   document.querySelectorAll('#formulaRows .formula-row').forEach(function (row, i) {
     Object.keys(PREFIX).forEach(function (cls) {
       const inp = row.querySelector('.' + cls);
@@ -2534,6 +2678,10 @@ function applyPickerColours() {
       c.color = colors[i];
       c.color2 = specs[i] ? specs[i].color2 : colors[i];
       c.opacity = specs[i] ? specs[i].op : DEFAULT_OPACITY;
+      // Thickness and line style are presentation-only too, so they restyle
+      // the existing curves without a replot (same as colour and opacity).
+      c.width = specs[i] ? specs[i].w : DEFAULT_STROKE_WIDTH;
+      c.brush = specs[i] ? specs[i].brush : DEFAULT_BRUSH;
     });
     redraw();
     renderLegend(lastCurves);
@@ -2557,6 +2705,16 @@ function transformLabel(c) {
   return s;
 }
 
+// " · 6px · Dashed" for a curve whose thickness or line style is off-default,
+// so the legend/table says which pen drew it.
+function strokeLabel(c) {
+  if (!c) return '';
+  let s = '';
+  if (c.width && c.width !== DEFAULT_STROKE_WIDTH) s += '  · ' + fmt(c.width) + 'px';
+  if (c.brush && c.brush !== DEFAULT_BRUSH) s += '  · ' + brushLabel(c.brush);
+  return s;
+}
+
 function renderTable(curves, colors) {
   const tb = document.getElementById('points');
   const polar = mode === 'polar';
@@ -2568,7 +2726,7 @@ function renderTable(curves, colors) {
     const color2 = c.color2 || color;
     html += '<tr class="branch-hdr"><td colspan="2">' +
       '<span class="dot-inline" style="background:' + colorFill(color, color2, opToAlpha(c.opacity)) + '"></span>' +
-      c.display + transformLabel(c) + '</td></tr>';
+      c.display + strokeLabel(c) + transformLabel(c) + '</td></tr>';
     c.branches.forEach(function (br) {
       if (c.branches.length > 1) {
         html += '<tr class="branch-hdr"><td colspan="2">&nbsp;&nbsp;branch ' + br.label + '</td></tr>';
@@ -2592,7 +2750,7 @@ function renderLegend(curves) {
     dot.className = 'color-dot';
     dot.style.background = colorFill(c.color, c.color2, opToAlpha(c.opacity));
     const label = document.createElement('span');
-    label.textContent = c.display + (c.inequality ? '  ' + c.inequality.op : '') + transformLabel(c);
+    label.textContent = c.display + (c.inequality ? '  ' + c.inequality.op : '') + strokeLabel(c) + transformLabel(c);
     item.appendChild(dot);
     item.appendChild(label);
     lg.appendChild(item);
@@ -2832,6 +2990,12 @@ function rangeParams(formulas) {
   // the default (100); the FULL list is then sent so rows stay aligned.
   const anyOpacity = specs.some(function (s) { return s.op !== DEFAULT_OPACITY; });
   if (anyOpacity) specs.forEach(function (s) { p.append('op', s.op); });
+  // Thickness + line style — same all-or-nothing rule (the FULL list once any
+  // row differs, so positions stay aligned on reload).
+  const anyWidth = specs.some(function (s) { return s.w !== DEFAULT_STROKE_WIDTH; });
+  if (anyWidth) specs.forEach(function (s) { p.append('w', s.w); });
+  const anyBrush = specs.some(function (s) { return s.brush !== DEFAULT_BRUSH; });
+  if (anyBrush) specs.forEach(function (s) { p.append('brush', s.brush); });
   const anyCenter = specs.some(function (s) { return s.cx !== 0 || s.cy !== 0; });
   if (anyCenter) specs.forEach(function (s) { p.append('cx', s.cx); p.append('cy', s.cy); });
   // Rotation params — same rule again: only when SOME row differs from the
@@ -2923,6 +3087,8 @@ async function plot() {
   const plotSpecs = collectSpecs();
   const ops = plotSpecs.map(function (s) { return s.op; });
   const color2s = plotSpecs.map(function (s) { return s.color2; });
+  const widths = plotSpecs.map(function (s) { return s.w; });
+  const brushList = plotSpecs.map(function (s) { return s.brush; });
   const curves = data.curves.map(function (c, i) {
     const cx = (centers[i] && centers[i].x) || 0;
     const cy = (centers[i] && centers[i].y) || 0;
@@ -2949,6 +3115,8 @@ async function plot() {
       // colour (a flat, single-colour stroke) when it is missing or equal.
       color2: color2s[i] || colors[i] || paletteAt(i),
       opacity: ops[i] === undefined ? DEFAULT_OPACITY : ops[i],
+      width: widths[i] === undefined ? DEFAULT_STROKE_WIDTH : widths[i],
+      brush: brushList[i] === undefined ? DEFAULT_BRUSH : brushList[i],
       display: c.display,
       branches: branches,
       inequality: c.inequality,
@@ -3108,6 +3276,8 @@ function init() {
       t.classList.remove('bad');           // mid-typing is never "wrong"
     } else if (t.classList.contains('opacity-pick')) {
       applyPickerColours();
+    } else if (t.classList.contains('width-pick')) {
+      applyPickerColours();   // thickness restyles the curve live, no replot
     }
   });
   // A centre or rotation change moves the curve — replot on commit (Enter or
@@ -3121,6 +3291,15 @@ function init() {
     }
     if (e.target && e.target.classList && e.target.classList.contains('opacity-pick')) {
       e.target.value = String(opNum(e.target.value));
+    }
+    // A thickness commit normalises the field (blank/out-of-range -> the
+    // default / the clamped value); the brush select restyles on commit.
+    if (e.target && e.target.classList && e.target.classList.contains('width-pick')) {
+      e.target.value = String(strokeNum(e.target.value));
+      applyPickerColours();
+    }
+    if (e.target && e.target.classList && e.target.classList.contains('brush-pick')) {
+      applyPickerColours();
     }
     // Enter/blur on the hex box: a usable colour is written to the device
     // swatch (so the model, the URL and the canvas follow) and normalised to

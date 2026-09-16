@@ -13,9 +13,9 @@ const sandbox = { console, Math, Number, String, Object, Set, Map, Array, isFini
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 // The guard `typeof document !== 'undefined'` prevents DOM code from running here.
-vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches, evalAst: evalAst, astStr: astStr, applyFunc: applyFunc, applyFunc2: applyFunc2, colorFill: colorFill, colorWithAlpha: colorWithAlpha, spliceAtCaret: spliceAtCaret, FN_HELP: FN_HELP, FN_CONSTS: FN_CONSTS, FUNCTIONS: FUNCTIONS, TWO_ARG_FUNCTIONS: TWO_ARG_FUNCTIONS };', sandbox);
+vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches, evalAst: evalAst, astStr: astStr, applyFunc: applyFunc, applyFunc2: applyFunc2, colorFill: colorFill, colorWithAlpha: colorWithAlpha, spliceAtCaret: spliceAtCaret, FN_HELP: FN_HELP, FN_CONSTS: FN_CONSTS, FUNCTIONS: FUNCTIONS, TWO_ARG_FUNCTIONS: TWO_ARG_FUNCTIONS, brushDash: brushDash, brushCap: brushCap, brushLabel: brushLabel, strokeNum: strokeNum, BRUSH_OPTIONS: BRUSH_OPTIONS, DEFAULT_BRUSH: DEFAULT_BRUSH, DEFAULT_STROKE_WIDTH: DEFAULT_STROKE_WIDTH };', sandbox);
 
-const { solveEquation, evalPoly, fmt, parseTerm, buildBranches, evalAst, astStr, applyFunc, applyFunc2, colorFill, colorWithAlpha, spliceAtCaret, FN_HELP, FN_CONSTS, FUNCTIONS, TWO_ARG_FUNCTIONS } = sandbox.__api;
+const { solveEquation, evalPoly, fmt, parseTerm, buildBranches, evalAst, astStr, applyFunc, applyFunc2, colorFill, colorWithAlpha, spliceAtCaret, FN_HELP, FN_CONSTS, FUNCTIONS, TWO_ARG_FUNCTIONS, brushDash, brushCap, brushLabel, strokeNum, BRUSH_OPTIONS, DEFAULT_BRUSH, DEFAULT_STROKE_WIDTH } = sandbox.__api;
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -314,6 +314,30 @@ check('every function has a menu tooltip', FUNCTIONS.every(n => typeof FN_HELP[n
 check('no stale menu tooltips', Object.keys(FN_HELP).every(n => FUNCTIONS.indexOf(n) !== -1), true);
 check('constants offered in the menu', FN_CONSTS.map(p => p[0]), ['pi', 'e', '\u03b8']);
 check('atan2 advertised as two-argument', TWO_ARG_FUNCTIONS.indexOf('atan2') !== -1, true);
+
+// --- line thickness + brushes (pure helpers) ---
+check('solid brush has no dash', brushDash('solid', 2.5), []);
+check('dashed scales with width', brushDash('dashed', 2), [6, 4]);
+check('dashed grows for a thick line', brushDash('dashed', 10), [30, 20]);
+check('dash never collapses on a thin line', brushDash('dashed', 0.5), [3, 2]);
+check('dotted is a dot pattern', brushDash('dotted', 2), [0.01, 4.4]);
+check('dashdot pattern', brushDash('dashdot', 2), [7, 4, 0.01, 4]);
+check('longdash pattern', brushDash('longdash', 2), [14, 6]);
+check('unknown brush falls back to solid', brushDash('wobble', 3), []);
+check('dotted needs round caps', brushCap('dotted'), 'round');
+check('dashdot needs round caps', brushCap('dashdot'), 'round');
+check('dashed uses butt caps', brushCap('dashed'), 'butt');
+check('solid keeps round caps', brushCap('solid'), 'round');
+check('strokeNum default', strokeNum(''), 2.5);
+check('strokeNum parses', strokeNum('6.5'), 6.5);
+check('strokeNum clamps high', strokeNum('99'), 12);
+check('strokeNum clamps low', strokeNum('0.1'), 0.5);
+check('strokeNum rejects junk', strokeNum('abc'), 2.5);
+check('brush menu order', BRUSH_OPTIONS.map(p => p[0]),
+      ['solid', 'dashed', 'dotted', 'dashdot', 'longdash']);
+check('every brush has a label', BRUSH_OPTIONS.every(p => p[1].length >= 4), true);
+check('default brush is solid', DEFAULT_BRUSH, 'solid');
+check('brushLabel', brushLabel('dashdot'), 'Dash-dot');
 
 // --- polar mode: r = f(θ) ---
 {

@@ -347,6 +347,89 @@ def test_index_function_menu_covers_every_function():
     assert sorted(re.findall(r"'([a-z0-9]+)'", two.group(1))) == sorted(TWO_ARG_FUNCTIONS)
 
 
+def test_index_renders_thickness_and_brush_controls_per_formula():
+    # Every row carries a line-thickness field (px) and a line-style menu,
+    # both defaulting to the classic 2.5px solid pen.
+    r = client.get("/", params=[("formula", "y = x"), ("formula", "y = 2x")])
+    assert r.status_code == 200
+    assert r.text.count('class="width-pick"') == 2
+    assert r.text.count('class="brush-pick"') == 2
+    assert 'id="w0" value="2.5"' in r.text
+    assert 'id="w1" value="2.5"' in r.text
+    assert r.text.count('<option value="solid" selected>Solid</option>') == 2
+
+
+def test_index_prefills_width_and_brush_params_in_order():
+    r = client.get(
+        "/",
+        params=[("formula", "y = x"), ("formula", "y = 2x"),
+                ("w", "7"), ("w", "1.5"),
+                ("brush", "dotted"), ("brush", "longdash")],
+    )
+    assert r.status_code == 200
+    assert 'id="w0" value="7.0"' in r.text
+    assert 'id="w1" value="1.5"' in r.text
+    assert 'value="dotted" selected' in r.text
+    assert 'value="longdash" selected' in r.text
+
+
+def test_index_width_and_brush_params_fallback_to_defaults():
+    # Out-of-range thickness -> 2.5; brush is an allow-list, so an unknown style
+    # -> solid (a known one is accepted case-insensitively).
+    r = client.get(
+        "/",
+        params=[("formula", "y = x"), ("formula", "y = 2x"),
+                ("w", "999"), ("brush", "scribble"),
+                ("w", "0.01"), ("brush", "DASHED")],
+    )
+    assert r.status_code == 200
+    assert 'id="w0" value="2.5"' in r.text
+    assert 'id="w1" value="2.5"' in r.text
+    assert r.text.count('<option value="solid" selected>Solid</option>') == 1
+    assert 'value="dashed" selected' in r.text
+
+
+def test_index_width_and_brush_params_never_inject_markup():
+    r = client.get(
+        "/",
+        params=[("formula", "y = x"), ("w", '"><script>alert(1)</script>'),
+                ("brush", '"><script>alert(1)</script>')],
+    )
+    assert r.status_code == 200
+    assert "<script>alert(1)</script>" not in r.text
+    assert 'id="w0" value="2.5"' in r.text
+
+
+def test_template_brushes_match_server():
+    # The brush menu (order + labels) and the thickness bounds live in the
+    # template; the server validates against its own copies. Drift would mean a
+    # share URL rendering a style the menu cannot show, or a silently wrong
+    # thickness clamp.
+    import re
+
+    from app.main import (BRUSH_LABELS, DEFAULT_BRUSH, DEFAULT_STROKE_WIDTH,
+                          MAX_STROKE_WIDTH, MIN_STROKE_WIDTH)
+
+    r = client.get("/")
+    m = re.search(r"const BRUSH_OPTIONS = \[(.*?)\n\];", r.text, re.S)
+    assert m, "BRUSH_OPTIONS not found in template"
+    pairs = re.findall(r"\['([a-z]+)', '([^']+)'\]", m.group(1))
+    assert [p[0] for p in pairs] == list(BRUSH_LABELS)
+    assert [p[1] for p in pairs] == list(BRUSH_LABELS.values())
+
+    # Numeric bounds are compared as FLOATS: Python writes 12.0 where JS writes
+    # 12, and the point of the test is the value, not the formatting.
+    for name, expected in (
+        ("DEFAULT_STROKE_WIDTH", DEFAULT_STROKE_WIDTH),
+        ("MIN_STROKE_WIDTH", MIN_STROKE_WIDTH),
+        ("MAX_STROKE_WIDTH", MAX_STROKE_WIDTH),
+    ):
+        m2 = re.search(rf"const {name} = ([0-9.]+);", r.text)
+        assert m2, f"{name} not found in template"
+        assert float(m2.group(1)) == expected, f"{name}: template {m2.group(1)} != server {expected}"
+    assert f"const DEFAULT_BRUSH = '{DEFAULT_BRUSH}'" in r.text
+
+
 def test_index_renders_palette_popover_with_presets():
     import re
 

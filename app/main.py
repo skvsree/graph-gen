@@ -41,6 +41,21 @@ MODES = {"cartesian", "polar"}
 CURVE_PALETTE = ["#dc2626", "#16a34a", "#2563eb", "#0891b2", "#0d9488"]
 DEFAULT_OPACITY = 100  # per-row line opacity in percent (0..100), default opaque
 DEFAULT_ROTATION = 0    # per-row rotation in degrees about the curve's own centre
+# Per-row line thickness in CSS pixels and its accepted range. Must mirror
+# DEFAULT_STROKE_WIDTH / MIN_STROKE_WIDTH / MAX_STROKE_WIDTH in the template JS.
+DEFAULT_STROKE_WIDTH = 2.5
+MIN_STROKE_WIDTH, MAX_STROKE_WIDTH = 0.5, 12.0
+# Per-row line style (brush). The ORDER here is the order of the menu in the
+# template's <select>, and MUST mirror JS `BRUSH_OPTIONS` —
+# test_template_brushes_match_server keeps the two in lockstep.
+BRUSH_LABELS: dict[str, str] = {
+    "solid": "Solid",
+    "dashed": "Dashed",
+    "dotted": "Dotted",
+    "dashdot": "Dash-dot",
+    "longdash": "Long dash",
+}
+DEFAULT_BRUSH = "solid"
 _COLOR_RE = re.compile(r"^#[0-9a-f]{6}$")
 # A per-row numeric field -- centre offset (cx, cy) or rotation (rot, degrees).
 # Accepts plain decimals and scientific notation, and is kept as a string so
@@ -185,6 +200,40 @@ def _clean_end_colors(raw: list[str], n: int, colors: list[str]) -> list[str]:
     return ends
 
 
+def _clean_widths(raw: list[str], n: int) -> list[float]:
+    """Validate repeated `w` params (line thickness in px) and pad to length n.
+
+    Invalid or out-of-range entries fall back to ``DEFAULT_STROKE_WIDTH`` for
+    that row position. Only floats are ever emitted, so a `w` param can never
+    inject markup into the page.
+    """
+    widths = []
+    for i in range(n):
+        v = raw[i].strip() if i < len(raw) else ""
+        try:
+            w = float(v)
+        except ValueError:
+            w = DEFAULT_STROKE_WIDTH
+        if not MIN_STROKE_WIDTH <= w <= MAX_STROKE_WIDTH:
+            w = DEFAULT_STROKE_WIDTH
+        widths.append(w)
+    return widths
+
+
+def _clean_brushes(raw: list[str], n: int) -> list[str]:
+    """Validate repeated `brush` params (line style) and pad to length n.
+
+    Anything outside ``BRUSH_LABELS`` (including a missing entry) becomes
+    ``DEFAULT_BRUSH`` — an allow-list, so a `brush` param can never reach the
+    page as anything but one of the known style names.
+    """
+    brushes = []
+    for i in range(n):
+        b = raw[i].strip().lower() if i < len(raw) else ""
+        brushes.append(b if b in BRUSH_LABELS else DEFAULT_BRUSH)
+    return brushes
+
+
 def _clean_opacities(raw: list[str], n: int) -> list[int]:
     """Validate repeated `op` params (percent 0..100) and pad to length n.
 
@@ -305,6 +354,8 @@ def index(
     color: list[str] = Query(default=[]),
     color2: list[str] = Query(default=[]),
     op: list[str] = Query(default=[]),
+    w: list[str] = Query(default=[]),
+    brush: list[str] = Query(default=[]),
     cx: list[str] = Query(default=[]),
     cy: list[str] = Query(default=[]),
     rot: list[str] = Query(default=[]),
@@ -322,7 +373,10 @@ def index(
     repeated ``?color2=#rrggbb`` params pre-fill its gradient END colour
     (default = that row's first colour, i.e. a solid line), repeated
     ``?op=…`` params pre-fill each row's line opacity (percent
-    0..100, default 100), and repeated ``?cx=…&cy=…`` params pre-fill each
+    0..100, default 100), repeated ``?w=…`` params pre-fill its line thickness
+    in px (0.5..12, default 2.5) and repeated ``?brush=solid|dashed|dotted|
+    dashdot|longdash`` params pre-fill its line style (default ``solid``), and
+    repeated ``?cx=…&cy=…`` params pre-fill each
     row's centre offset (default 0,0). Repeated ``?rot=`` params pre-fill
     each row's rotation in degrees about that centre (default 0).
     """
@@ -332,6 +386,8 @@ def index(
     colors = _clean_colors(color, len(formulas))
     end_colors = _clean_end_colors(color2, len(formulas), colors)
     opacities = _clean_opacities(op, len(formulas))
+    widths = _clean_widths(w, len(formulas))
+    brushes = _clean_brushes(brush, len(formulas))
     centers = _clean_centers(cx, cy, len(formulas))
     rotations = _clean_rotations(rot, len(formulas))
     with _metrics_lock:
@@ -345,6 +401,9 @@ def index(
             "colors": colors[:MAX_FORMULAS],
             "colors2": end_colors[:MAX_FORMULAS],
             "opacities": opacities[:MAX_FORMULAS],
+            "widths": widths[:MAX_FORMULAS],
+            "brushes": brushes[:MAX_FORMULAS],
+            "brush_options": list(BRUSH_LABELS.items()),
             "centers": centers[:MAX_FORMULAS],
             "rotations": rotations[:MAX_FORMULAS],
             "mode": mode,

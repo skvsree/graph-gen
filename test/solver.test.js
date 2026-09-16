@@ -13,9 +13,9 @@ const sandbox = { console, Math, Number, String, Object, Set, Map, Array, isFini
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 // The guard `typeof document !== 'undefined'` prevents DOM code from running here.
-vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches, evalAst: evalAst, astStr: astStr, applyFunc: applyFunc, applyFunc2: applyFunc2, colorFill: colorFill, colorWithAlpha: colorWithAlpha, spliceAtCaret: spliceAtCaret, FN_HELP: FN_HELP, FN_CONSTS: FN_CONSTS, FUNCTIONS: FUNCTIONS, TWO_ARG_FUNCTIONS: TWO_ARG_FUNCTIONS, brushDash: brushDash, brushCap: brushCap, brushLabel: brushLabel, strokeNum: strokeNum, BRUSH_OPTIONS: BRUSH_OPTIONS, DEFAULT_BRUSH: DEFAULT_BRUSH, DEFAULT_STROKE_WIDTH: DEFAULT_STROKE_WIDTH };', sandbox);
+vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches, evalAst: evalAst, astStr: astStr, applyFunc: applyFunc, applyFunc2: applyFunc2, colorFill: colorFill, colorWithAlpha: colorWithAlpha, spliceAtCaret: spliceAtCaret, FN_HELP: FN_HELP, FN_CONSTS: FN_CONSTS, FUNCTIONS: FUNCTIONS, TWO_ARG_FUNCTIONS: TWO_ARG_FUNCTIONS, styleDash: styleDash, styleCap: styleCap, styleLabel: styleLabel, strokeNum: strokeNum, STYLE_OPTIONS: STYLE_OPTIONS, DEFAULT_STYLE: DEFAULT_STYLE, DEFAULT_STROKE_WIDTH: DEFAULT_STROKE_WIDTH, calligraphyWidth: calligraphyWidth, pencilJitter: pencilJitter, hashUnit: hashUnit, penLabel: penLabel, PEN_OPTIONS: PEN_OPTIONS, DEFAULT_PEN: DEFAULT_PEN };', sandbox);
 
-const { solveEquation, evalPoly, fmt, parseTerm, buildBranches, evalAst, astStr, applyFunc, applyFunc2, colorFill, colorWithAlpha, spliceAtCaret, FN_HELP, FN_CONSTS, FUNCTIONS, TWO_ARG_FUNCTIONS, brushDash, brushCap, brushLabel, strokeNum, BRUSH_OPTIONS, DEFAULT_BRUSH, DEFAULT_STROKE_WIDTH } = sandbox.__api;
+const { solveEquation, evalPoly, fmt, parseTerm, buildBranches, evalAst, astStr, applyFunc, applyFunc2, colorFill, colorWithAlpha, spliceAtCaret, FN_HELP, FN_CONSTS, FUNCTIONS, TWO_ARG_FUNCTIONS, styleDash, styleCap, styleLabel, strokeNum, STYLE_OPTIONS, DEFAULT_STYLE, DEFAULT_STROKE_WIDTH, calligraphyWidth, pencilJitter, hashUnit, penLabel, PEN_OPTIONS, DEFAULT_PEN } = sandbox.__api;
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -315,29 +315,57 @@ check('no stale menu tooltips', Object.keys(FN_HELP).every(n => FUNCTIONS.indexO
 check('constants offered in the menu', FN_CONSTS.map(p => p[0]), ['pi', 'e', '\u03b8']);
 check('atan2 advertised as two-argument', TWO_ARG_FUNCTIONS.indexOf('atan2') !== -1, true);
 
-// --- line thickness + brushes (pure helpers) ---
-check('solid brush has no dash', brushDash('solid', 2.5), []);
-check('dashed scales with width', brushDash('dashed', 2), [6, 4]);
-check('dashed grows for a thick line', brushDash('dashed', 10), [30, 20]);
-check('dash never collapses on a thin line', brushDash('dashed', 0.5), [3, 2]);
-check('dotted is a dot pattern', brushDash('dotted', 2), [0.01, 4.4]);
-check('dashdot pattern', brushDash('dashdot', 2), [7, 4, 0.01, 4]);
-check('longdash pattern', brushDash('longdash', 2), [14, 6]);
-check('unknown brush falls back to solid', brushDash('wobble', 3), []);
-check('dotted needs round caps', brushCap('dotted'), 'round');
-check('dashdot needs round caps', brushCap('dashdot'), 'round');
-check('dashed uses butt caps', brushCap('dashed'), 'butt');
-check('solid keeps round caps', brushCap('solid'), 'round');
+// --- line thickness + styles + pens (pure helpers) ---
+check('solid style has no dash', styleDash('solid', 2.5), []);
+check('dashed scales with width', styleDash('dashed', 2), [6, 4]);
+check('dashed grows for a thick line', styleDash('dashed', 10), [30, 20]);
+check('dash never collapses on a thin line', styleDash('dashed', 0.5), [3, 2]);
+check('dotted is a dot pattern', styleDash('dotted', 2), [0.01, 4.4]);
+check('dashdot pattern', styleDash('dashdot', 2), [7, 4, 0.01, 4]);
+check('longdash pattern', styleDash('longdash', 2), [14, 6]);
+check('unknown style falls back to solid', styleDash('wobble', 3), []);
+check('dotted needs round caps', styleCap('dotted'), 'round');
+check('dashdot needs round caps', styleCap('dashdot'), 'round');
+check('dashed uses butt caps', styleCap('dashed'), 'butt');
+check('solid keeps round caps', styleCap('solid'), 'round');
 check('strokeNum default', strokeNum(''), 2.5);
 check('strokeNum parses', strokeNum('6.5'), 6.5);
 check('strokeNum clamps high', strokeNum('99'), 12);
 check('strokeNum clamps low', strokeNum('0.1'), 0.5);
 check('strokeNum rejects junk', strokeNum('abc'), 2.5);
-check('brush menu order', BRUSH_OPTIONS.map(p => p[0]),
+check('style menu order', STYLE_OPTIONS.map(p => p[0]),
       ['solid', 'dashed', 'dotted', 'dashdot', 'longdash']);
-check('every brush has a label', BRUSH_OPTIONS.every(p => p[1].length >= 4), true);
-check('default brush is solid', DEFAULT_BRUSH, 'solid');
-check('brushLabel', brushLabel('dashdot'), 'Dash-dot');
+check('every style has a label', STYLE_OPTIONS.every(p => p[1].length >= 4), true);
+check('default style is solid', DEFAULT_STYLE, 'solid');
+check('styleLabel', styleLabel('dashdot'), 'Dash-dot');
+
+// --- pens: calligraphy nib maths + deterministic pencil noise ---
+check('pen menu order', PEN_OPTIONS.map(p => p[0]),
+      ['technical', 'pencil', 'marker', 'calligraphy', 'highlighter']);
+check('default pen is technical', DEFAULT_PEN, 'technical');
+check('penLabel', penLabel('calligraphy'), 'Calligraphy');
+{
+  // Full width across the nib edge (135° to a 45° nib), a quarter along it.
+  check('chisel is full width across the edge', calligraphyWidth(3 * Math.PI / 4, 10), 10);
+  check('chisel is a quarter width along the edge', calligraphyWidth(Math.PI / 4, 10), 2.5);
+  check('chisel never vanishes', calligraphyWidth(Math.PI / 4, 2) > 0, true);
+  // Horizontals and verticals are symmetric and bold-ish; a 45° diagonal is
+  // thinner than both (the classic calligraphy modulation).
+  const h = calligraphyWidth(0, 10), v = calligraphyWidth(Math.PI / 2, 10);
+  check('horizontal and vertical match', Math.abs(h - v) < 1e-12, true);
+  check('diagonal is thinner than straight', calligraphyWidth(Math.PI / 4, 10) < h, true);
+}
+{
+  // Deterministic: same inputs -> same noise, and it stays in range. Random
+  // jitter would crawl on every pan/zoom/redraw.
+  const a = pencilJitter(3, 1, 7), b = pencilJitter(3, 1, 7), c = pencilJitter(3, 1, 8);
+  check('pencil noise is deterministic', a, b);
+  check('pencil noise differs per point', a[0] === c[0] && a[1] === c[1], false);
+  check('pencil offsets stay in [-1, 1]',
+        a.slice(0, 2).every(v => v >= -1 && v <= 1), true);
+  check('pencil alpha stays in [0, 1]', a[2] >= 0 && a[2] <= 1, true);
+  check('different rows get different noise', pencilJitter(1, 0, 5)[0] === pencilJitter(2, 0, 5)[0], false);
+}
 
 // --- polar mode: r = f(θ) ---
 {

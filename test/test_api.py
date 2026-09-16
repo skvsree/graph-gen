@@ -347,24 +347,24 @@ def test_index_function_menu_covers_every_function():
     assert sorted(re.findall(r"'([a-z0-9]+)'", two.group(1))) == sorted(TWO_ARG_FUNCTIONS)
 
 
-def test_index_renders_thickness_and_brush_controls_per_formula():
+def test_index_renders_thickness_and_style_controls_per_formula():
     # Every row carries a line-thickness field (px) and a line-style menu,
     # both defaulting to the classic 2.5px solid pen.
     r = client.get("/", params=[("formula", "y = x"), ("formula", "y = 2x")])
     assert r.status_code == 200
     assert r.text.count('class="width-pick"') == 2
-    assert r.text.count('class="brush-pick"') == 2
+    assert r.text.count('class="style-pick"') == 2
     assert 'id="w0" value="2.5"' in r.text
     assert 'id="w1" value="2.5"' in r.text
     assert r.text.count('<option value="solid" selected>Solid</option>') == 2
 
 
-def test_index_prefills_width_and_brush_params_in_order():
+def test_index_prefills_width_and_style_params_in_order():
     r = client.get(
         "/",
         params=[("formula", "y = x"), ("formula", "y = 2x"),
                 ("w", "7"), ("w", "1.5"),
-                ("brush", "dotted"), ("brush", "longdash")],
+                ("style", "dotted"), ("style", "longdash")],
     )
     assert r.status_code == 200
     assert 'id="w0" value="7.0"' in r.text
@@ -373,14 +373,14 @@ def test_index_prefills_width_and_brush_params_in_order():
     assert 'value="longdash" selected' in r.text
 
 
-def test_index_width_and_brush_params_fallback_to_defaults():
-    # Out-of-range thickness -> 2.5; brush is an allow-list, so an unknown style
+def test_index_width_and_style_params_fallback_to_defaults():
+    # Out-of-range thickness -> 2.5; the style is an allow-list, so an unknown one
     # -> solid (a known one is accepted case-insensitively).
     r = client.get(
         "/",
         params=[("formula", "y = x"), ("formula", "y = 2x"),
-                ("w", "999"), ("brush", "scribble"),
-                ("w", "0.01"), ("brush", "DASHED")],
+                ("w", "999"), ("style", "scribble"),
+                ("w", "0.01"), ("style", "DASHED")],
     )
     assert r.status_code == 200
     assert 'id="w0" value="2.5"' in r.text
@@ -389,33 +389,33 @@ def test_index_width_and_brush_params_fallback_to_defaults():
     assert 'value="dashed" selected' in r.text
 
 
-def test_index_width_and_brush_params_never_inject_markup():
+def test_index_width_and_style_params_never_inject_markup():
     r = client.get(
         "/",
         params=[("formula", "y = x"), ("w", '"><script>alert(1)</script>'),
-                ("brush", '"><script>alert(1)</script>')],
+                ("style", '"><script>alert(1)</script>')],
     )
     assert r.status_code == 200
     assert "<script>alert(1)</script>" not in r.text
     assert 'id="w0" value="2.5"' in r.text
 
 
-def test_template_brushes_match_server():
-    # The brush menu (order + labels) and the thickness bounds live in the
+def test_template_styles_match_server():
+    # The style menu (order + labels) and the thickness bounds live in the
     # template; the server validates against its own copies. Drift would mean a
     # share URL rendering a style the menu cannot show, or a silently wrong
     # thickness clamp.
     import re
 
-    from app.main import (BRUSH_LABELS, DEFAULT_BRUSH, DEFAULT_STROKE_WIDTH,
+    from app.main import (STYLE_LABELS, DEFAULT_STYLE, DEFAULT_STROKE_WIDTH,
                           MAX_STROKE_WIDTH, MIN_STROKE_WIDTH)
 
     r = client.get("/")
-    m = re.search(r"const BRUSH_OPTIONS = \[(.*?)\n\];", r.text, re.S)
-    assert m, "BRUSH_OPTIONS not found in template"
+    m = re.search(r"const STYLE_OPTIONS = \[(.*?)\n\];", r.text, re.S)
+    assert m, "STYLE_OPTIONS not found in template"
     pairs = re.findall(r"\['([a-z]+)', '([^']+)'\]", m.group(1))
-    assert [p[0] for p in pairs] == list(BRUSH_LABELS)
-    assert [p[1] for p in pairs] == list(BRUSH_LABELS.values())
+    assert [p[0] for p in pairs] == list(STYLE_LABELS)
+    assert [p[1] for p in pairs] == list(STYLE_LABELS.values())
 
     # Numeric bounds are compared as FLOATS: Python writes 12.0 where JS writes
     # 12, and the point of the test is the value, not the formatting.
@@ -427,7 +427,69 @@ def test_template_brushes_match_server():
         m2 = re.search(rf"const {name} = ([0-9.]+);", r.text)
         assert m2, f"{name} not found in template"
         assert float(m2.group(1)) == expected, f"{name}: template {m2.group(1)} != server {expected}"
-    assert f"const DEFAULT_BRUSH = '{DEFAULT_BRUSH}'" in r.text
+    assert f"const DEFAULT_STYLE = '{DEFAULT_STYLE}'" in r.text
+
+
+def test_index_renders_pen_menu_per_formula():
+    # Every row carries a pen menu (technical / pencil / marker / calligraphy /
+    # highlighter) next to the line style, both defaulting to the plain pen.
+    r = client.get("/", params=[("formula", "y = x"), ("formula", "y = 2x")])
+    assert r.status_code == 200
+    assert r.text.count('class="pen-pick"') == 2
+    assert r.text.count('<option value="technical" selected>Technical</option>') == 2
+    for label in ("Pencil", "Marker", "Calligraphy", "Highlighter"):
+        assert f">{label}</option>" in r.text, label
+
+
+def test_index_prefills_pen_params_in_order():
+    r = client.get(
+        "/", params=[("formula", "y = x"), ("formula", "y = 2x"),
+                     ("pen", "calligraphy"), ("pen", "pencil")],
+    )
+    assert r.status_code == 200
+    assert 'value="calligraphy" selected' in r.text
+    assert 'value="pencil" selected' in r.text
+
+
+def test_index_calligraphy_disables_the_dash_style():
+    # A chisel nib draws its own marks, so its style menu is greyed out — but
+    # only for the rows that actually use calligraphy.
+    r = client.get("/", params=[("formula", "y = x"), ("formula", "y = 2x"),
+                                ("pen", "calligraphy"), ("pen", "marker")])
+    assert r.status_code == 200
+    assert r.text.count('class="style-pick" id="style0" disabled') == 1
+    assert 'id="style1" disabled' not in r.text
+
+
+def test_index_pen_params_fall_back_to_technical():
+    r = client.get("/", params=[("formula", "y = x"), ("formula", "y = 2x"),
+                                ("pen", "crayon"), ("pen", '"><script>alert(1)</script>')])
+    assert r.status_code == 200
+    assert "<script>alert(1)</script>" not in r.text
+    assert r.text.count('<option value="technical" selected>Technical</option>') == 2
+
+
+def test_index_legacy_brush_param_still_means_the_dash_style():
+    # `brush=` was this control's first name; links shared before the rename
+    # must keep working (and must not be read as a pen).
+    r = client.get("/", params=[("formula", "y = x"), ("brush", "dotted")])
+    assert r.status_code == 200
+    assert 'value="dotted" selected' in r.text
+    assert r.text.count('<option value="technical" selected>Technical</option>') == 1   # pen untouched
+
+
+def test_template_pens_match_server():
+    import re
+
+    from app.main import DEFAULT_PEN, PEN_LABELS
+
+    r = client.get("/")
+    m = re.search(r"const PEN_OPTIONS = \[(.*?)\n\];", r.text, re.S)
+    assert m, "PEN_OPTIONS not found in template"
+    pairs = re.findall(r"\['([a-z]+)', '([^']+)'\]", m.group(1))
+    assert [p[0] for p in pairs] == list(PEN_LABELS)
+    assert [p[1] for p in pairs] == list(PEN_LABELS.values())
+    assert f"const DEFAULT_PEN = '{DEFAULT_PEN}'" in r.text
 
 
 def test_index_renders_palette_popover_with_presets():

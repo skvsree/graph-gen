@@ -45,17 +45,28 @@ DEFAULT_ROTATION = 0    # per-row rotation in degrees about the curve's own cent
 # DEFAULT_STROKE_WIDTH / MIN_STROKE_WIDTH / MAX_STROKE_WIDTH in the template JS.
 DEFAULT_STROKE_WIDTH = 2.5
 MIN_STROKE_WIDTH, MAX_STROKE_WIDTH = 0.5, 12.0
-# Per-row line style (brush). The ORDER here is the order of the menu in the
-# template's <select>, and MUST mirror JS `BRUSH_OPTIONS` —
-# test_template_brushes_match_server keeps the two in lockstep.
-BRUSH_LABELS: dict[str, str] = {
+# Per-row line style (how the stroke is BROKEN UP). The ORDER here is the order
+# of the menu in the template's <select>, and MUST mirror JS `STYLE_OPTIONS` —
+# test_template_styles_match_server keeps the two in lockstep.
+STYLE_LABELS: dict[str, str] = {
     "solid": "Solid",
     "dashed": "Dashed",
     "dotted": "Dotted",
     "dashdot": "Dash-dot",
     "longdash": "Long dash",
 }
-DEFAULT_BRUSH = "solid"
+DEFAULT_STYLE = "solid"
+# Per-row PEN (how the stroke is DRAWN: clean vector line, grainy pencil,
+# translucent marker, chisel-tip calligraphy, flat highlighter). Must mirror JS
+# `PEN_OPTIONS` / `DEFAULT_PEN`.
+PEN_LABELS: dict[str, str] = {
+    "technical": "Technical",
+    "pencil": "Pencil",
+    "marker": "Marker",
+    "calligraphy": "Calligraphy",
+    "highlighter": "Highlighter",
+}
+DEFAULT_PEN = "technical"
 _COLOR_RE = re.compile(r"^#[0-9a-f]{6}$")
 # A per-row numeric field -- centre offset (cx, cy) or rotation (rot, degrees).
 # Accepts plain decimals and scientific notation, and is kept as a string so
@@ -220,18 +231,31 @@ def _clean_widths(raw: list[str], n: int) -> list[float]:
     return widths
 
 
-def _clean_brushes(raw: list[str], n: int) -> list[str]:
-    """Validate repeated `brush` params (line style) and pad to length n.
+def _clean_styles(raw: list[str], n: int) -> list[str]:
+    """Validate repeated `style` params (line style) and pad to length n.
 
-    Anything outside ``BRUSH_LABELS`` (including a missing entry) becomes
-    ``DEFAULT_BRUSH`` — an allow-list, so a `brush` param can never reach the
+    Anything outside ``STYLE_LABELS`` (including a missing entry) becomes
+    ``DEFAULT_STYLE`` — an allow-list, so a `style` param can never reach the
     page as anything but one of the known style names.
     """
-    brushes = []
+    styles = []
     for i in range(n):
         b = raw[i].strip().lower() if i < len(raw) else ""
-        brushes.append(b if b in BRUSH_LABELS else DEFAULT_BRUSH)
-    return brushes
+        styles.append(b if b in STYLE_LABELS else DEFAULT_STYLE)
+    return styles
+
+
+def _clean_pens(raw: list[str], n: int) -> list[str]:
+    """Validate repeated `pen` params (drawing pen) and pad to length n.
+
+    An allow-list like ``_clean_styles``: an unknown/missing pen becomes
+    ``DEFAULT_PEN`` (the plain vector line).
+    """
+    pens = []
+    for i in range(n):
+        p = raw[i].strip().lower() if i < len(raw) else ""
+        pens.append(p if p in PEN_LABELS else DEFAULT_PEN)
+    return pens
 
 
 def _clean_opacities(raw: list[str], n: int) -> list[int]:
@@ -355,7 +379,9 @@ def index(
     color2: list[str] = Query(default=[]),
     op: list[str] = Query(default=[]),
     w: list[str] = Query(default=[]),
+    style: list[str] = Query(default=[]),
     brush: list[str] = Query(default=[]),
+    pen: list[str] = Query(default=[]),
     cx: list[str] = Query(default=[]),
     cy: list[str] = Query(default=[]),
     rot: list[str] = Query(default=[]),
@@ -374,8 +400,11 @@ def index(
     (default = that row's first colour, i.e. a solid line), repeated
     ``?op=…`` params pre-fill each row's line opacity (percent
     0..100, default 100), repeated ``?w=…`` params pre-fill its line thickness
-    in px (0.5..12, default 2.5) and repeated ``?brush=solid|dashed|dotted|
-    dashdot|longdash`` params pre-fill its line style (default ``solid``), and
+    in px (0.5..12, default 2.5), repeated ``?style=solid|dashed|dotted|
+    dashdot|longdash`` params pre-fill its line style and repeated ``?pen=
+    technical|pencil|marker|calligraphy|highlighter`` params its pen (both
+    default to the plain solid vector line; ``?brush=`` is kept as a legacy
+    alias for ``style``), and
     repeated ``?cx=…&cy=…`` params pre-fill each
     row's centre offset (default 0,0). Repeated ``?rot=`` params pre-fill
     each row's rotation in degrees about that centre (default 0).
@@ -387,7 +416,10 @@ def index(
     end_colors = _clean_end_colors(color2, len(formulas), colors)
     opacities = _clean_opacities(op, len(formulas))
     widths = _clean_widths(w, len(formulas))
-    brushes = _clean_brushes(brush, len(formulas))
+    # `brush` was this feature's first name for the dash style; keep accepting
+    # it so links shared before the rename still render.
+    styles = _clean_styles(style if style else brush, len(formulas))
+    pens = _clean_pens(pen, len(formulas))
     centers = _clean_centers(cx, cy, len(formulas))
     rotations = _clean_rotations(rot, len(formulas))
     with _metrics_lock:
@@ -402,8 +434,10 @@ def index(
             "colors2": end_colors[:MAX_FORMULAS],
             "opacities": opacities[:MAX_FORMULAS],
             "widths": widths[:MAX_FORMULAS],
-            "brushes": brushes[:MAX_FORMULAS],
-            "brush_options": list(BRUSH_LABELS.items()),
+            "styles": styles[:MAX_FORMULAS],
+            "style_options": list(STYLE_LABELS.items()),
+            "pens": pens[:MAX_FORMULAS],
+            "pen_options": list(PEN_LABELS.items()),
             "centers": centers[:MAX_FORMULAS],
             "rotations": rotations[:MAX_FORMULAS],
             "mode": mode,

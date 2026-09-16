@@ -71,14 +71,14 @@
   .ctr-axis { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; }
   .ctr-lbl { font-size: 10.5px; line-height: 1; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
   .ctr input[type=number] { width: 64px; padding: 8px 6px; text-align: center; }
-  /* Per-row brush (line style) menu. */
-  .form select.brush-pick {
+  /* Per-row style (line style) menu. */
+  .form select.style-pick {
     width: 96px; padding: 8px 6px; font-size: 13px; font-family: inherit;
     border: 1px solid var(--border); border-radius: 8px; background: var(--card);
     color: var(--fg); cursor: pointer;
   }
-  .form select.brush-pick:focus { outline: 2px solid var(--input-focus); border-color: #2563eb; }
-  .brush-ctr .ctr-lbl { text-transform: none; font-size: 11px; }
+  .form select.style-pick:focus { outline: 2px solid var(--input-focus); border-color: #2563eb; }
+  .style-ctr .ctr-lbl { text-transform: none; font-size: 11px; }
   /* Per-formula rotation (degrees about the curve's own centre, default 0). */
   .rot-ctr .ctr-lbl { font-size: 13px; text-transform: none; }
   .ctr input[type=number]::-webkit-inner-spin-button { opacity: 0.4; }
@@ -271,7 +271,7 @@
 <div class="wrap">
   <header>
     <h1>xy-graph-gen</h1>
-    <p>Enter an equation in x and y — it is solved for y and plotted for x = 1 … 100, with (0,0) at the centre of the graph. Functions: <code>sin cos tan asin acos atan atan2(y,x) sinh cosh tanh log ln log10 log2 sqrt cbrt exp abs floor ceil round sign</code> (+ <code>e</code>, <code>pi</code>). Each row takes two colours — the line fades from the first into the second — plus its own thickness (<code>px</code>) and pen style (<code>brush</code>: solid, dashed, dotted, dash-dot, long dash). Drag to pan, scroll or pinch to zoom, double-click to reset.</p>
+    <p>Enter an equation in x and y — it is solved for y and plotted for x = 1 … 100, with (0,0) at the centre of the graph. Functions: <code>sin cos tan asin acos atan atan2(y,x) sinh cosh tanh log ln log10 log2 sqrt cbrt exp abs floor ceil round sign</code> (+ <code>e</code>, <code>pi</code>). Each row takes two colours — the line fades from the first into the second — plus its own thickness (<code>px</code>), a pen (<code>pen</code>: Technical, Pencil, Marker, Calligraphy, Highlighter) and a line style (<code>style</code>: solid, dashed, dotted, dash-dot, long dash). Drag to pan, scroll or pinch to zoom, double-click to reset.</p>
   </header>
 
   <div class="tabs" id="tabs">
@@ -311,12 +311,21 @@
             <input type="number" class="width-pick" id="w{{ loop.index0 }}" value="{{ widths[loop.index0] }}" placeholder="2.5" min="0.5" max="12" step="0.5">
           </span>
         </span>
-        {% set sel = brushes[loop.index0] %}
-        <span class="ctr brush-ctr" title="This formula's line style — solid, dashed, dotted, dash-dot or long dash">
+        {% set sel = styles[loop.index0] %}
+        {% set selPen = pens[loop.index0] %}
+        <span class="ctr pen-ctr" title="This formula's pen — calligraphy has a chisel tip (thin on diagonals, thick across), marker and highlighter are translucent felt/flat tips, pencil is grainy">
           <span class="ctr-axis">
-            <label class="ctr-lbl" for="brush{{ loop.index0 }}">brush</label>
-            <select class="brush-pick" id="brush{{ loop.index0 }}">
-              {% for value, label in brush_options %}<option value="{{ value }}"{% if value == sel %} selected{% endif %}>{{ label }}</option>{% endfor %}
+            <label class="ctr-lbl" for="pen{{ loop.index0 }}">pen</label>
+            <select class="pen-pick" id="pen{{ loop.index0 }}">
+              {% for value, label in pen_options %}<option value="{{ value }}"{% if value == selPen %} selected{% endif %}>{{ label }}</option>{% endfor %}
+            </select>
+          </span>
+        </span>
+        <span class="ctr style-ctr" title="This formula's line style — how the stroke is broken up: solid, dashed, dotted, dash-dot or long dash (calligraphy pens draw their own chisel marks, so this is disabled there)">
+          <span class="ctr-axis">
+            <label class="ctr-lbl" for="style{{ loop.index0 }}">style</label>
+            <select class="style-pick" id="style{{ loop.index0 }}"{% if selPen == 'calligraphy' %} disabled{% endif %}>
+              {% for value, label in style_options %}<option value="{{ value }}"{% if value == sel %} selected{% endif %}>{{ label }}</option>{% endfor %}
             </select>
           </span>
         </span>
@@ -1655,50 +1664,37 @@ function draw(curves) {
     ctx.fillText('y', cx + 12, 18);
   }
 
-  // Line through each curve's branches (each curve has its own colour). The
-  // polyline breaks when two consecutive samples jump across a vertical
-  // asymptote (tan, 1/x) so no false line is drawn through the wall.
+  // Line through each curve's branches (each curve has its own colour and pen).
+  // The polyline breaks when two consecutive samples jump across a vertical
+  // asymptote (tan, 1/x) so no false line is drawn through the wall — every
+  // pen honours that (calligraphy skips the segment instead of drawing a quad).
   curves.forEach(function (curve) {
     // Inequality shading first (translucent fill), then the crisp boundary.
     if (curve.inequality) drawInequalityShade(ctx, curve, X, Y, W, H);
-    // Stroke at the row's chosen opacity: 'rgba(...)' colour so the alpha
-    // applies to this curve's own pixels only (no globalAlpha save/restore).
-    // A row whose second colour differs from its first strokes with a
-    // gradient along the curve instead of a flat colour.
-    const curveAlpha = opToAlpha(curve.opacity);
-    const curveColor = colorWithAlpha(curve.color, curveAlpha);
-    const flat = !(curve.color2 && curve.color2 !== curve.color);
-    const curveWidth = curve.width || DEFAULT_STROKE_WIDTH;
-    const curveBrush = curve.brush || DEFAULT_BRUSH;
+    const curvePen = curve.pen || DEFAULT_PEN;
     curve.branches.forEach(function (br) {
       if (!br.points.length) return;
-      const paint = flat
-        ? curveColor
-        : branchGradient(ctx, br.points, curve.color, curve.color2, curveAlpha, X, Y);
-      ctx.strokeStyle = paint;
-      ctx.lineWidth = curveWidth;
-      ctx.lineJoin = 'round';
-      // Line style is per curve and re-set for every branch: ctx.setLineDash
-      // is sticky, so leaving a pattern on would leak into the next curve
-      // (and into the asymptote-break segments).
-      ctx.lineCap = brushCap(curveBrush);
-      ctx.setLineDash(brushDash(curveBrush, curveWidth));
-      ctx.beginPath();
-      let prevX = null, prevY = null;
-      for (let i = 0; i < br.points.length; i++) {
-        const px = X(br.points[i].x), py = Y(br.points[i].y);
-        if (i === 0) { ctx.moveTo(px, py); }
-        else if (Math.abs(py - prevY) > H && Math.abs(px - prevX) < 20) { ctx.moveTo(px, py); }
-        else { ctx.lineTo(px, py); }
-        prevX = px; prevY = py;
+      // The pen decides HOW the branch is drawn; the style (dash) decides how
+      // the stroke is broken up. Both are per row and compose.
+      if (curvePen === 'pencil') drawPencil(ctx, br, curve, X, Y, H);
+      else if (curvePen === 'calligraphy') drawCalligraphy(ctx, br, curve, X, Y, H);
+      else if (curvePen === 'marker') {
+        // Felt tip: a soft translucent halo under a slightly stronger core, so
+        // crossings darken like real marker ink.
+        strokeBranch(ctx, br, curve, X, Y, H, 1.35, 0.3);
+        strokeBranch(ctx, br, curve, X, Y, H, 1.0, 0.7);
+      } else if (curvePen === 'highlighter') {
+        // Flat, very translucent and a little wider — reads as a highlighter.
+        strokeBranch(ctx, br, curve, X, Y, H, 1.6, 0.32);
+      } else {
+        strokeBranch(ctx, br, curve, X, Y, H, 1, 1);   // technical pen
       }
-      ctx.stroke();
-      ctx.setLineDash([]);   // never leak the pattern into anything else
 
       // Point markers — only when the unit spacing is wide enough that they
-      // don't merge into a solid ribbon.
+      // don't merge into a solid ribbon. They carry the PEN's own ink weight,
+      // so a highlighter's samples don't show as opaque dots on a pale band.
       if (unit >= 6) {
-        ctx.fillStyle = paint;
+        ctx.fillStyle = paintFor(ctx, br, curve, penMarkerAlpha(curvePen), X, Y);
         for (const p of br.points) {
           const px = X(p.x), py = Y(p.y);
           if (px < 0 || px > W || py < 0 || py > H) continue;
@@ -1707,6 +1703,137 @@ function draw(curves) {
       }
     });
   });
+}
+
+/* ================= pens: one branch, five ways =================
+
+   The pen (per row) decides how the stroke is drawn; the style decides how it
+   is broken up. Every pen paints with the row's own paint — flat colour or the
+   colour→colour2 gradient — and respects the asymptote breaks traced by
+   traceBranch. Alpha/halo tricks use rgba paints, never ctx.globalAlpha, so a
+   pen can only affect its own pixels. */
+
+// Paint for a branch: the row's gradient (when it has two colours) or a flat
+// rgba colour, at `alphaMul` × the row's opacity.
+function paintFor(ctx, br, curve, alphaMul, X, Y) {
+  const a = opToAlpha(curve.opacity) * (alphaMul === undefined ? 1 : alphaMul);
+  if (curve.color2 && curve.color2 !== curve.color) {
+    return branchGradient(ctx, br.points, curve.color, curve.color2, a, X, Y);
+  }
+  return colorWithAlpha(curve.color, a);
+}
+
+// Trace one branch as a canvas path, breaking it where two consecutive samples
+// jump across a vertical asymptote. `jitter(i)` may return a [dx, dy] pixel
+// offset (pencil) — it must be deterministic, or the line would shimmer on
+// every pan/zoom/redraw.
+function traceBranch(ctx, br, X, Y, H, jitter) {
+  ctx.beginPath();
+  let prevX = null, prevY = null;
+  for (let i = 0; i < br.points.length; i++) {
+    const off = jitter ? jitter(i) : null;
+    const px = X(br.points[i].x) + (off ? off[0] : 0);
+    const py = Y(br.points[i].y) + (off ? off[1] : 0);
+    if (i === 0) { ctx.moveTo(px, py); }
+    else if (Math.abs(py - prevY) > H && Math.abs(px - prevX) < 20) { ctx.moveTo(px, py); }
+    else { ctx.lineTo(px, py); }
+    prevX = px; prevY = py;
+  }
+}
+
+// One clean stroke of a branch: `widthMul` × the row's thickness at
+// `alphaMul` × its opacity, honouring the dash style.
+function strokeBranch(ctx, br, curve, X, Y, H, widthMul, alphaMul) {
+  const w = (curve.width || DEFAULT_STROKE_WIDTH) * (widthMul === undefined ? 1 : widthMul);
+  ctx.strokeStyle = paintFor(ctx, br, curve, alphaMul, X, Y);
+  ctx.lineWidth = Math.max(0.5, w);
+  ctx.lineJoin = 'round';
+  // Round caps keep solid lines smooth and are REQUIRED by the dotted patterns
+  // (a zero-length dash with butt caps paints nothing at all). setLineDash is
+  // sticky, so it is always cleared again below.
+  ctx.lineCap = styleCap(curve.style);
+  ctx.setLineDash(styleDash(curve.style, w));
+  traceBranch(ctx, br, X, Y, H, null);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+// Pencil: three offset passes at partial alpha plus scattered grain. The
+// offsets come from a hash of (row seed, pass, point index), so the same graph
+// always looks the same — random jitter would crawl on every redraw.
+function drawPencil(ctx, br, curve, X, Y, H) {
+  const w = curve.width || DEFAULT_STROKE_WIDTH;
+  const seed = curve.seed || 1;
+  for (let pass = 0; pass < 3; pass++) {
+    const jitter = function (i) {
+      const j = pencilJitter(seed, pass, i);
+      return [j[0] * w * 0.45, j[1] * w * 0.45];
+    };
+    ctx.strokeStyle = paintFor(ctx, br, curve, 0.42, X, Y);
+    ctx.lineWidth = Math.max(0.5, w * (pass === 0 ? 0.7 : 0.5));
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.setLineDash(styleDash(curve.style, w));
+    traceBranch(ctx, br, X, Y, H, jitter);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  // Grain: short flecks near every other sample, at varying alpha, so the edge
+  // looks broken rather than vector-clean.
+  const grainPaint = paintFor(ctx, br, curve, 1, X, Y);
+  for (let i = 0; i < br.points.length; i += 2) {
+    const j = pencilJitter(seed, 7, i);
+    if (j[2] < 0.45) continue;                    // skip some => grainy
+    const px = X(br.points[i].x) + j[0] * w * 0.5;
+    const py = Y(br.points[i].y) + j[1] * w * 0.5;
+    ctx.strokeStyle = grainPaint;
+    ctx.lineWidth = Math.max(0.5, w * 0.3);
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(px + j[0] * w * 0.9, py + j[1] * w * 0.9);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+}
+
+// Calligraphy: a chisel nib at 45°. A mark's width depends on the angle
+// between the motion and the nib edge — full width across the edge, a hairline
+// along it — so horizontals and verticals come out bold and diagonals thin.
+// Each segment is a filled quad whose vertices share their offset with the
+// neighbouring segment, so joins are watertight. The dash style does not apply
+// (the chisel marks are the pattern); the style select is disabled for it.
+function drawCalligraphy(ctx, br, curve, X, Y, H) {
+  const pts = br.points, n = pts.length;
+  if (n < 2) return;
+  const w = curve.width || DEFAULT_STROKE_WIDTH;
+  const sx = new Array(n), sy = new Array(n), segW = new Array(n - 1);
+  for (let i = 0; i < n; i++) {
+    sx[i] = X(pts[i].x);
+    sy[i] = Y(pts[i].y);
+  }
+  for (let i = 0; i + 1 < n; i++) {
+    segW[i] = calligraphyWidth(Math.atan2(sy[i + 1] - sy[i], sx[i + 1] - sx[i]), w);
+  }
+  ctx.fillStyle = paintFor(ctx, br, curve, 1, X, Y);
+  for (let i = 0; i + 1 < n; i++) {
+    const x1 = sx[i], y1 = sy[i], x2 = sx[i + 1], y2 = sy[i + 1];
+    if (Math.abs(y2 - y1) > H && Math.abs(x2 - x1) < 20) continue;   // asymptote
+    let nx = -(y2 - y1), ny = (x2 - x1);
+    const len = Math.hypot(nx, ny) || 1;
+    nx /= len; ny /= len;
+    // Half-width at each end: the average of the two adjacent segments' mark
+    // widths, halved (segW holds FULL widths, the offsets are from the centre
+    // line, so the drawn mark ends up exactly `width` wide).
+    const h1 = 0.25 * (segW[Math.max(0, i - 1)] + segW[i]);
+    const h2 = 0.25 * (segW[i] + segW[Math.min(n - 2, i + 1)]);
+    ctx.beginPath();
+    ctx.moveTo(x1 + nx * h1, y1 + ny * h1);
+    ctx.lineTo(x2 + nx * h2, y2 + ny * h2);
+    ctx.lineTo(x2 - nx * h2, y2 - ny * h2);
+    ctx.lineTo(x1 - nx * h1, y1 - ny * h1);
+    ctx.closePath();
+    ctx.fill();
+  }
 }
 
 /* ================= inequality shading ================= */
@@ -2254,44 +2381,44 @@ const DEFAULT_STROKE_WIDTH = 2.5;
 const MIN_STROKE_WIDTH = 0.5;
 const MAX_STROKE_WIDTH = 12;
 
-// Line styles offered per row, in menu order — mirrors BRUSH_LABELS in
-// app/main.py (kept in lockstep by test_template_brushes_match_server).
-const BRUSH_OPTIONS = [
+// Line styles offered per row, in menu order — mirrors STYLE_LABELS in
+// app/main.py (kept in lockstep by test_template_styles_match_server).
+const STYLE_OPTIONS = [
   ['solid', 'Solid'],
   ['dashed', 'Dashed'],
   ['dotted', 'Dotted'],
   ['dashdot', 'Dash-dot'],
   ['longdash', 'Long dash'],
 ];
-const DEFAULT_BRUSH = 'solid';
+const DEFAULT_STYLE = 'solid';
 
-// Canvas dash pattern for a brush, in pixels, scaled by the stroke width so a
+// Canvas dash pattern for a style, in pixels, scaled by the stroke width so a
 // dashed 8px line stays a dashed 8px line instead of collapsing into a dotted
 // one. A ZERO-LENGTH dash renders as a dot under round caps — that is how
 // "dotted" (and the dot of "dash-dot") is drawn. Pure, so the node suite can
 // cover it without a canvas.
-function brushDash(brush, width) {
+function styleDash(style, width) {
   const n = Number(width);
   const w = Math.max(MIN_STROKE_WIDTH, isFinite(n) && n > 0 ? n : DEFAULT_STROKE_WIDTH);
   const u = Math.max(1, w);
-  if (brush === 'dashed') return [3 * u, 2 * u];
-  if (brush === 'dotted') return [0.01, 2.2 * u];
-  if (brush === 'dashdot') return [3.5 * u, 2 * u, 0.01, 2 * u];
-  if (brush === 'longdash') return [7 * u, 3 * u];
+  if (style === 'dashed') return [3 * u, 2 * u];
+  if (style === 'dotted') return [0.01, 2.2 * u];
+  if (style === 'dashdot') return [3.5 * u, 2 * u, 0.01, 2 * u];
+  if (style === 'longdash') return [7 * u, 3 * u];
   return [];                                    // solid
 }
 
 // Round caps keep solid lines smooth and are REQUIRED by the dotted patterns
 // (a zero-length dash with butt caps paints nothing at all).
-function brushCap(brush) {
-  return (brush === 'dashed' || brush === 'longdash') ? 'butt' : 'round';
+function styleCap(style) {
+  return (style === 'dashed' || style === 'longdash') ? 'butt' : 'round';
 }
 
-function brushLabel(brush) {
-  for (let i = 0; i < BRUSH_OPTIONS.length; i++) {
-    if (BRUSH_OPTIONS[i][0] === brush) return BRUSH_OPTIONS[i][1];
+function styleLabel(style) {
+  for (let i = 0; i < STYLE_OPTIONS.length; i++) {
+    if (STYLE_OPTIONS[i][0] === style) return STYLE_OPTIONS[i][1];
   }
-  return brush ? String(brush) : '';
+  return style ? String(style) : '';
 }
 
 // Parse a thickness input's value (px). Blank/invalid -> the default; anything
@@ -2305,14 +2432,91 @@ function strokeNum(v) {
   return Math.min(MAX_STROKE_WIDTH, Math.max(MIN_STROKE_WIDTH, n));
 }
 
-// Parse a row's brush select. Unknown/missing -> solid.
-function brushOf(row) {
-  const sel = row.querySelector('.brush-pick');
+// Parse a row's line-style select. Unknown/missing -> solid.
+function styleOf(row) {
+  const sel = row.querySelector('.style-pick');
   const v = sel ? String(sel.value) : '';
-  for (let i = 0; i < BRUSH_OPTIONS.length; i++) {
-    if (BRUSH_OPTIONS[i][0] === v) return v;
+  for (let i = 0; i < STYLE_OPTIONS.length; i++) {
+    if (STYLE_OPTIONS[i][0] === v) return v;
   }
-  return DEFAULT_BRUSH;
+  return DEFAULT_STYLE;
+}
+
+// --- pens (how the stroke is drawn) --------------------------------------
+// Mirrors PEN_LABELS / DEFAULT_PEN in app/main.py; kept in lockstep by
+// test_template_pens_match_server.
+const PEN_OPTIONS = [
+  ['technical', 'Technical'],
+  ['pencil', 'Pencil'],
+  ['marker', 'Marker'],
+  ['calligraphy', 'Calligraphy'],
+  ['highlighter', 'Highlighter'],
+];
+const DEFAULT_PEN = 'technical';
+
+// The chisel edge of a calligraphy nib, at 45° in SCREEN space (so the thin
+// direction is the on-screen diagonal, whatever the data axes do).
+const CALLIGRAPHY_NIB = Math.PI / 4;
+
+// Mark width of a chisel nib for a stroke travelling at `angle` (radians), as a
+// fraction of `width`: full width when the motion crosses the nib edge,
+// one quarter when it runs along it. Never zero — a 45° diagonal would vanish.
+function calligraphyWidth(angle, width) {
+  const base = Math.max(MIN_STROKE_WIDTH, Number(width) || DEFAULT_STROKE_WIDTH);
+  return base * (0.25 + 0.75 * Math.abs(Math.sin(angle - CALLIGRAPHY_NIB)));
+}
+
+// Stable 0..1 hash of three integers (deterministic pseudo-noise).
+function hashUnit(a, b, c) {
+  let h = (a * 73856093) ^ (b * 19349663) ^ (c * 83492791);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967295;
+}
+
+// Pencil noise for (row seed, pass, point index): [dx, dy, r] with dx/dy in
+// [-1, 1] and r in [0, 1]. Deterministic by design — see drawPencil.
+function pencilJitter(seed, pass, index) {
+  return [
+    hashUnit(seed, pass, index * 2 + 1) * 2 - 1,
+    hashUnit(seed + 101, pass, index * 2 + 2) * 2 - 1,
+    hashUnit(seed + 202, pass * 7 + 1, index),
+  ];
+}
+
+// Markers carry the pen's own ink weight, so a highlighter's samples don't
+// read as opaque dots on top of a translucent band (and a pencil's stay soft).
+function penMarkerAlpha(pen) {
+  if (pen === 'pencil') return 0.5;
+  if (pen === 'marker') return 0.75;
+  if (pen === 'highlighter') return 0.35;
+  return 1;
+}
+
+// Parse a row's pen select. Unknown/missing -> technical.
+function penOf(row) {
+  const sel = row.querySelector('.pen-pick');
+  const v = sel ? String(sel.value) : '';
+  for (let i = 0; i < PEN_OPTIONS.length; i++) {
+    if (PEN_OPTIONS[i][0] === v) return v;
+  }
+  return DEFAULT_PEN;
+}
+
+function penLabel(pen) {
+  for (let i = 0; i < PEN_OPTIONS.length; i++) {
+    if (PEN_OPTIONS[i][0] === pen) return PEN_OPTIONS[i][1];
+  }
+  return pen ? String(pen) : '';
+}
+
+// A calligraphy nib draws its own marks instead of a dashed stroke, so its
+// style select is disabled (and greyed) — but its VALUE still round-trips, so
+// switching back to a stroke pen restores the dash pattern.
+function syncStyleEnabled(row) {
+  const sel = row ? row.querySelector('.style-pick') : null;
+  if (!sel) return;
+  sel.disabled = penOf(row) === 'calligraphy';
 }
 
 // The per-row "curve specs" in row order, deduped on formula + centre +
@@ -2342,7 +2546,7 @@ function collectSpecs() {
     specs.push({ formula: f, cx: cx, cy: cy, rot: rot, color: color, color2: color2,
                  op: opNum(row.querySelector('.opacity-pick').value),
                  w: strokeNum(row.querySelector('.width-pick') ? row.querySelector('.width-pick').value : ''),
-                 brush: brushOf(row), key: key });
+                 style: styleOf(row), pen: penOf(row), key: key });
   });
   return specs;
 }
@@ -2370,7 +2574,8 @@ const MAX_ROWS = 5;
 // ATTRIBUTES (the server-rendered values), NOT anything typed since, so each
 // field's live .value has to be copied explicitly.
 const ROW_FIELDS = ['.formula-input', '.color-pick', '.hex-pick', '.color2-pick', '.hex2-pick',
-                    '.opacity-pick', '.width-pick', '.brush-pick', '.ctr-x', '.ctr-y', '.rot-pick'];
+                    '.opacity-pick', '.width-pick', '.pen-pick', '.style-pick',
+                    '.ctr-x', '.ctr-y', '.rot-pick'];
 
 // Icons built in JS mirror the inline SVGs in the template (same .ico classes,
 // so they inherit the same stroke/currentColor rules).
@@ -2413,6 +2618,7 @@ function duplicateRow(row) {
   copy.querySelectorAll('input').forEach(function (inp) { inp.removeAttribute('id'); });
   copy.querySelectorAll('label[for]').forEach(function (l) { l.removeAttribute('for'); });
   row.insertAdjacentElement('afterend', copy);
+  syncStyleEnabled(copy);   // a copied calligraphy row keeps its style greyed
   onRowsChanged();
 }
 
@@ -2534,22 +2740,43 @@ function addFormulaRow(value) {
   wAxis.appendChild(wLbl);
   wAxis.appendChild(wIn);
   wWrap.appendChild(wAxis);
-  // Line style (brush) — mirrors the server-rendered `.brush-pick`.
+  // Pen (how the stroke is drawn) — mirrors the server-rendered `.pen-pick`.
+  const penWrap = document.createElement('span');
+  penWrap.className = 'ctr pen-ctr';
+  penWrap.title = "This formula's pen — calligraphy has a chisel tip (thin on diagonals, thick across), marker and highlighter are translucent felt/flat tips, pencil is grainy";
+  const penAxis = document.createElement('span');
+  penAxis.className = 'ctr-axis';
+  const penLbl = document.createElement('label');
+  penLbl.className = 'ctr-lbl';
+  penLbl.textContent = 'pen';
+  const penSel = document.createElement('select');
+  penSel.className = 'pen-pick';
+  PEN_OPTIONS.forEach(function (pair) {
+    const o = document.createElement('option');
+    o.value = pair[0];
+    o.textContent = pair[1];
+    if (pair[0] === DEFAULT_PEN) o.selected = true;
+    penSel.appendChild(o);
+  });
+  penAxis.appendChild(penLbl);
+  penAxis.appendChild(penSel);
+  penWrap.appendChild(penAxis);
+  // Line style (style) — mirrors the server-rendered `.style-pick`.
   const brWrap = document.createElement('span');
-  brWrap.className = 'ctr brush-ctr';
-  brWrap.title = "This formula's line style — solid, dashed, dotted, dash-dot or long dash";
+  brWrap.className = 'ctr style-ctr';
+  brWrap.title = "This formula's line style — how the stroke is broken up: solid, dashed, dotted, dash-dot or long dash (calligraphy pens draw their own chisel marks, so this is disabled there)";
   const brAxis = document.createElement('span');
   brAxis.className = 'ctr-axis';
   const brLbl = document.createElement('label');
   brLbl.className = 'ctr-lbl';
-  brLbl.textContent = 'brush';
+  brLbl.textContent = 'style';
   const brSel = document.createElement('select');
-  brSel.className = 'brush-pick';
-  BRUSH_OPTIONS.forEach(function (pair) {
+  brSel.className = 'style-pick';
+  STYLE_OPTIONS.forEach(function (pair) {
     const o = document.createElement('option');
     o.value = pair[0];
     o.textContent = pair[1];
-    if (pair[0] === DEFAULT_BRUSH) o.selected = true;
+    if (pair[0] === DEFAULT_STYLE) o.selected = true;
     brSel.appendChild(o);
   });
   brAxis.appendChild(brLbl);
@@ -2619,12 +2846,14 @@ function addFormulaRow(value) {
   row.appendChild(cell);
   row.appendChild(opWrap);
   row.appendChild(wWrap);
+  row.appendChild(penWrap);
   row.appendChild(brWrap);
   row.appendChild(ctr);
   row.appendChild(rot);
   row.appendChild(dup);
   row.appendChild(del);
   rows.appendChild(row);
+  syncStyleEnabled(row);
   input.focus();
   onRowsChanged();
 }
@@ -2645,7 +2874,7 @@ function onRowsChanged() {
 // the <label for> pairs and the #formula fallback, but duplicated ids are
 // invalid HTML and would break both).
 function reindexRows() {
-  const PREFIX = { 'opacity-pick': 'op', 'width-pick': 'w', 'brush-pick': 'brush',
+  const PREFIX = { 'opacity-pick': 'op', 'width-pick': 'w', 'pen-pick': 'pen', 'style-pick': 'style',
                    'ctr-x': 'ctrX', 'ctr-y': 'ctrY', 'rot-pick': 'rot' };
   document.querySelectorAll('#formulaRows .formula-row').forEach(function (row, i) {
     Object.keys(PREFIX).forEach(function (cls) {
@@ -2678,10 +2907,12 @@ function applyPickerColours() {
       c.color = colors[i];
       c.color2 = specs[i] ? specs[i].color2 : colors[i];
       c.opacity = specs[i] ? specs[i].op : DEFAULT_OPACITY;
-      // Thickness and line style are presentation-only too, so they restyle
-      // the existing curves without a replot (same as colour and opacity).
+      // Thickness, line style and pen are presentation-only too, so they
+      // restyle the existing curves without a replot (same as colour/opacity).
       c.width = specs[i] ? specs[i].w : DEFAULT_STROKE_WIDTH;
-      c.brush = specs[i] ? specs[i].brush : DEFAULT_BRUSH;
+      c.style = specs[i] ? specs[i].style : DEFAULT_STYLE;
+      c.pen = specs[i] ? specs[i].pen : DEFAULT_PEN;
+      if (lastCurves[i]) lastCurves[i].seed = i + 1;
     });
     redraw();
     renderLegend(lastCurves);
@@ -2705,13 +2936,14 @@ function transformLabel(c) {
   return s;
 }
 
-// " · 6px · Dashed" for a curve whose thickness or line style is off-default,
-// so the legend/table says which pen drew it.
+// " · 6px · Dotted · Marker" for a curve whose thickness, line style or pen is
+// off-default, so the legend/table says which pen drew it.
 function strokeLabel(c) {
   if (!c) return '';
   let s = '';
   if (c.width && c.width !== DEFAULT_STROKE_WIDTH) s += '  · ' + fmt(c.width) + 'px';
-  if (c.brush && c.brush !== DEFAULT_BRUSH) s += '  · ' + brushLabel(c.brush);
+  if (c.style && c.style !== DEFAULT_STYLE) s += '  · ' + styleLabel(c.style);
+  if (c.pen && c.pen !== DEFAULT_PEN) s += '  · ' + penLabel(c.pen);
   return s;
 }
 
@@ -2994,8 +3226,10 @@ function rangeParams(formulas) {
   // row differs, so positions stay aligned on reload).
   const anyWidth = specs.some(function (s) { return s.w !== DEFAULT_STROKE_WIDTH; });
   if (anyWidth) specs.forEach(function (s) { p.append('w', s.w); });
-  const anyBrush = specs.some(function (s) { return s.brush !== DEFAULT_BRUSH; });
-  if (anyBrush) specs.forEach(function (s) { p.append('brush', s.brush); });
+  const anyStyle = specs.some(function (s) { return s.style !== DEFAULT_STYLE; });
+  if (anyStyle) specs.forEach(function (s) { p.append('style', s.style); });
+  const anyPen = specs.some(function (s) { return s.pen !== DEFAULT_PEN; });
+  if (anyPen) specs.forEach(function (s) { p.append('pen', s.pen); });
   const anyCenter = specs.some(function (s) { return s.cx !== 0 || s.cy !== 0; });
   if (anyCenter) specs.forEach(function (s) { p.append('cx', s.cx); p.append('cy', s.cy); });
   // Rotation params — same rule again: only when SOME row differs from the
@@ -3088,7 +3322,8 @@ async function plot() {
   const ops = plotSpecs.map(function (s) { return s.op; });
   const color2s = plotSpecs.map(function (s) { return s.color2; });
   const widths = plotSpecs.map(function (s) { return s.w; });
-  const brushList = plotSpecs.map(function (s) { return s.brush; });
+  const styleList = plotSpecs.map(function (s) { return s.style; });
+  const penList = plotSpecs.map(function (s) { return s.pen; });
   const curves = data.curves.map(function (c, i) {
     const cx = (centers[i] && centers[i].x) || 0;
     const cy = (centers[i] && centers[i].y) || 0;
@@ -3116,7 +3351,11 @@ async function plot() {
       color2: color2s[i] || colors[i] || paletteAt(i),
       opacity: ops[i] === undefined ? DEFAULT_OPACITY : ops[i],
       width: widths[i] === undefined ? DEFAULT_STROKE_WIDTH : widths[i],
-      brush: brushList[i] === undefined ? DEFAULT_BRUSH : brushList[i],
+      style: styleList[i] === undefined ? DEFAULT_STYLE : styleList[i],
+      pen: penList[i] === undefined ? DEFAULT_PEN : penList[i],
+      // Stable per-row seed for the pencil's deterministic grain (row order),
+      // so the same graph is drawn identically on every redraw.
+      seed: i + 1,
       display: c.display,
       branches: branches,
       inequality: c.inequality,
@@ -3293,12 +3532,18 @@ function init() {
       e.target.value = String(opNum(e.target.value));
     }
     // A thickness commit normalises the field (blank/out-of-range -> the
-    // default / the clamped value); the brush select restyles on commit.
+    // default / the clamped value); the style select restyles on commit.
     if (e.target && e.target.classList && e.target.classList.contains('width-pick')) {
       e.target.value = String(strokeNum(e.target.value));
       applyPickerColours();
     }
-    if (e.target && e.target.classList && e.target.classList.contains('brush-pick')) {
+    if (e.target && e.target.classList && e.target.classList.contains('style-pick')) {
+      applyPickerColours();
+    }
+    // A pen change restyles the curve live; calligraphy also greys out the dash
+    // style (its chisel marks are the pattern), without touching its value.
+    if (e.target && e.target.classList && e.target.classList.contains('pen-pick')) {
+      syncStyleEnabled(e.target.closest('.formula-row'));
       applyPickerColours();
     }
     // Enter/blur on the hex box: a usable colour is written to the device

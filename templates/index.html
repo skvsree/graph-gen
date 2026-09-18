@@ -256,6 +256,14 @@
     color: var(--error-fg); background: var(--error-bg); border: 1px solid var(--error-border);
     padding: 10px 14px; border-radius: 8px; margin: 0 0 12px; font-size: 14px; display: none;
   }
+  /* ?diag=1 writes a multi-line capability report here. It needs its OWN box:
+     clearError() runs on every successful plot and would wipe #error, and it
+     needs pre-line or the newlines collapse into one long smear. */
+  #diag {
+    color: var(--muted); background: var(--card); border: 1px solid var(--border);
+    padding: 10px 14px; border-radius: 8px; margin: 0 0 12px;
+    font-size: 12.5px; display: none; white-space: pre-line;
+  }
   .graphbox { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
   canvas { width: 100%; height: auto; display: block; cursor: grab; touch-action: none; }
   .meta { font-size: 12.5px; color: var(--muted); margin-top: 8px; }
@@ -469,6 +477,7 @@
 
   <p id="solved"></p>
   <div id="error"></div>
+  <div id="diag"></div>
 
   <div class="legend" id="legend"></div>
 
@@ -1911,6 +1920,17 @@ function videoStrategy(caps) {
   return null;
 }
 
+// Why an export came out as WebM instead of MP4. Pure, so the node suite covers
+// the branches; shown to the user, and it is also the one line that says which
+// half of the MP4 path this browser is missing (Firefox for Android has no
+// VideoEncoder at all, so this reads "no H.264 encoder" there).
+function videoFallbackReason(caps) {
+  const c = caps || {};
+  if (!c.muxer) return 'the MP4 muxer did not load';
+  if (!c.webcodecs) return 'this browser has no H.264 encoder';
+  return 'MP4 encoding is unavailable here';
+}
+
 // Where frames are actually written: the graph's card colour painted first (the
 // canvas itself is transparent), then the graph on top.
 function videoStage(cv) {
@@ -2033,10 +2053,11 @@ async function exportVideo() {
     ? pickVideoMime(function (t) { return MediaRecorder.isTypeSupported(t); })
     : null;
   const codec = await pickMp4Codec(cv.width, cv.height);
-  const strategy = videoStrategy({
+  const caps = {
     webcodecs: !!codec, muxer: !!mp4MuxerLib(),
     recorder: typeof MediaRecorder !== 'undefined', recordable: picked !== null,
-  });
+  };
+  const strategy = videoStrategy(caps);
   if (!strategy || (strategy === 'recorder' && !videoCanRecord(cv))) {
     const msg = 'This browser cannot record video (no WebCodecs H.264, no MediaRecorder, '
       + 'no canvas.captureStream). Try Chrome, Edge, Firefox or Safari 16.4+.';
@@ -2069,7 +2090,10 @@ async function exportVideo() {
     a.click();
     a.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
-    flashButton(btn, 'Video saved');
+    flashButton(btn, 'Video saved');     // this raises the toast too
+    // Never leave the file extension a mystery: if we could not write MP4, say
+    // why (a .webm that appears with no explanation reads as a bug).
+    if (ext !== 'mp4') toast('Saved as .' + ext + ' — ' + videoFallbackReason(caps));
   } catch (e) {
     const msg = 'Video export failed: ' + errorText(e && e.message ? e.message : e);
     showError(msg);        // the toast is gone in 2.6s — keep the text readable
@@ -2082,6 +2106,45 @@ async function exportVideo() {
     animSync();
     if (wasPlaying) animPlay(false);
   }
+}
+
+// `?diag=1` prints a video-export capability report into the error box. There is
+// no console on a phone, so this is how a user can read back WHY an export came
+// out .webm: Firefox for Android has no VideoEncoder at all (WebCodecs shipped
+// on desktop only), and that is invisible from the outside otherwise.
+async function initVideoDiag() {
+  if (typeof location === 'undefined' || !/[?&]diag=1(&|$)/.test(location.search)) return;
+  const cv = document.getElementById('graph');
+  const rec = function (t) {
+    try {
+      return (typeof MediaRecorder !== 'undefined') && MediaRecorder.isTypeSupported(t);
+    } catch (e) { return false; }
+  };
+  const codec = (cv && typeof pickMp4Codec === 'function')
+    ? await pickMp4Codec(cv.width, cv.height) : null;
+  const caps = {
+    webcodecs: !!codec, muxer: !!mp4MuxerLib(),
+    recorder: typeof MediaRecorder !== 'undefined',
+    recordable: rec('video/mp4;codecs=avc1.42E01E') || rec('video/webm;codecs=vp8'),
+  };
+  const strategy = videoStrategy(caps);
+  const lines = [
+    'video export report',
+    'ua: ' + (navigator.userAgent || '?'),
+    'VideoEncoder: ' + (typeof VideoEncoder) + '  VideoFrame: ' + (typeof VideoFrame),
+    'H.264 codec it picked: ' + (codec || 'NONE'),
+    'mp4 muxer loaded: ' + !!mp4MuxerLib(),
+    'MediaRecorder: ' + (typeof MediaRecorder)
+      + '  mp4: ' + rec('video/mp4;codecs=avc1.42E01E')
+      + '  vp8: ' + rec('video/webm;codecs=vp8')
+      + '  vp9: ' + rec('video/webm;codecs=vp9'),
+    'strategy: ' + strategy + ' -> .' + (strategy === 'webcodecs' ? 'mp4' : 'webm'),
+  ];
+  if (strategy !== 'webcodecs') lines.push('not MP4 because: ' + videoFallbackReason(caps));
+  const box = document.getElementById('diag');
+  if (!box) return;
+  box.textContent = lines.join('\n');
+  box.style.display = 'block';
 }
 
 function animSavePrefs() {
@@ -4278,6 +4341,7 @@ function init() {
   document.getElementById('gridBtn').addEventListener('click', toggleGrid);
   document.getElementById('axisBtn').addEventListener('click', toggleAxes);
   initAnim();
+  initVideoDiag();               // does nothing unless the URL has ?diag=1
   ['history', 'samples'].forEach(function (kind) {
     const el = document.getElementById(kind + 'Accordion');
     el.addEventListener('toggle', function () {

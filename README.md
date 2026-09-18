@@ -53,6 +53,19 @@ Two paths produce that file, chosen at runtime by capability:
   drawing itself (~4 s at 1×), and the format follows the browser (MP4/H.264 on
   Chromium and Safari, WebM/VP8 on Firefox).
 
+**Firefox for Android cannot write MP4, and no code change can fix that:** Mozilla
+enabled WebCodecs on *desktop* platforms only (Firefox 130+), so that browser has
+no `VideoEncoder` and there is no H.264 encoder to mux. It falls back to
+`MediaRecorder`, which there supports `video/webm;codecs=vp8` alone. Chrome on
+Android does record MP4, so the same button yields an `.mp4` there. Whenever the
+export cannot be MP4 the app says why in the toast ("Saved as .webm — this
+browser has no H.264 encoder") instead of leaving the extension a mystery.
+
+`https://xy.selviz.in/?diag=1` prints a video-export capability report (encoder
+availability, muxer status, MediaRecorder formats, the chosen path) into the
+page's message box — there is no console on a phone, so this is how a user can
+tell us what their browser can do.
+
 Frame capture is **composited onto the graph's own card colour** first. The
 canvas is transparent and H.264 has no alpha channel, so encoding it raw turned
 every empty pixel black — the video showed a black background instead of the

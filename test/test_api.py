@@ -1177,7 +1177,7 @@ def test_mp4_is_muxed_in_the_browser_from_webcodecs():
     assert "avc1.42001F" in text
     # The strategy decides between the two paths, and MP4 is the only extension
     # the WebCodecs path may write.
-    assert "videoStrategy({" in text
+    assert "const strategy = videoStrategy(caps);" in text
     assert "ext = 'mp4';" in text
     assert "recordWithMediaRecorder" in text         # fallback kept for WebM
 
@@ -1220,11 +1220,44 @@ def test_vendor_route_serves_whitelisted_assets_only():
     assert client.get("/vendor/main.py").status_code == 404
 
 
+def test_webm_exports_explain_themselves_and_diag_reports_capabilities():
+    """A .webm download must never be a mystery, and a phone must be able to
+    report WHY it got one.
+
+    Reported from Android Firefox ("still showing webm not mp4"): WebCodecs
+    shipped on DESKTOP Firefox only, so that browser has no VideoEncoder and the
+    MP4 path is unreachable there. The export now names the reason, and `?diag=1`
+    prints a capability report into the error box — there is no console on a
+    phone, so the page has to be able to tell us what it can do.
+    """
+    text = client.get("/").text
+    assert "function videoFallbackReason" in text
+    assert "this browser has no H.264 encoder" in text
+    assert "the MP4 muxer did not load" in text
+    assert "toast('Saved as .' + ext + ' — ' + videoFallbackReason(caps))" in text
+    # The reason must not be swallowed when the file was saved successfully:
+    # flashButton() raises its own toast, so the note has to come after it.
+    saved = text.index("flashButton(btn, 'Video saved');")
+    note = "toast('Saved as .' + ext + ' — ' + videoFallbackReason(caps));"
+    assert text.index(note) > saved
+    assert "function initVideoDiag" in text
+    assert "initVideoDiag();" in text
+    assert "[?&]diag=1(&|$)" in text
+    # Its own box: clearError() runs on every successful plot and would wipe
+    # #error, and the report needs pre-line or it smears into one line.
+    assert '<div id="diag"></div>' in text
+    assert "#diag {" in text
+    assert "white-space: pre-line" in text
+    assert "video export report" in text
+    assert "not MP4 because: " in text
+    assert "box.textContent = lines.join('\\n');" in text
+
+
 def test_service_worker_caches_the_vendored_muxer():
     """The MP4 export must keep working offline in the installed PWA."""
     sw = client.get("/sw.js").text
     assert "startsWith('/vendor/')" in sw
-    assert "const VERSION = 'v11';" in sw
+    assert "const VERSION = 'v13';" in sw
 
 
 def test_anim_video_button_is_a_styled_toolbar_button():

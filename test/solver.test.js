@@ -13,9 +13,9 @@ const sandbox = { console, Math, Number, String, Object, Set, Map, Array, isFini
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 // The guard `typeof document !== 'undefined'` prevents DOM code from running here.
-vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches, evalAst: evalAst, astStr: astStr, applyFunc: applyFunc, applyFunc2: applyFunc2, colorFill: colorFill, colorWithAlpha: colorWithAlpha, spliceAtCaret: spliceAtCaret, FN_HELP: FN_HELP, FN_CONSTS: FN_CONSTS, FUNCTIONS: FUNCTIONS, TWO_ARG_FUNCTIONS: TWO_ARG_FUNCTIONS, styleDash: styleDash, styleCap: styleCap, styleLabel: styleLabel, strokeNum: strokeNum, STYLE_OPTIONS: STYLE_OPTIONS, DEFAULT_STYLE: DEFAULT_STYLE, DEFAULT_STROKE_WIDTH: DEFAULT_STROKE_WIDTH, calligraphyWidth: calligraphyWidth, pencilJitter: pencilJitter, hashUnit: hashUnit, penLabel: penLabel, PEN_OPTIONS: PEN_OPTIONS, DEFAULT_PEN: DEFAULT_PEN, animRowTotals: animRowTotals, animCounts: animCounts, animRate: animRate, animDurationMs: animDurationMs, animBranchCounts: animBranchCounts, ANIM_BASE_MS: ANIM_BASE_MS, ANIM_SPEEDS: ANIM_SPEEDS, animVideoTimes: animVideoTimes, pickVideoMime: pickVideoMime, VIDEO_MIMES: VIDEO_MIMES, ANIM_VIDEO_FPS: ANIM_VIDEO_FPS, videoPushable: videoPushable, videoStrategy: videoStrategy, MP4_VIDEO_CODECS: MP4_VIDEO_CODECS, VIDEO_BITRATE: VIDEO_BITRATE };', sandbox);
+vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches, evalAst: evalAst, astStr: astStr, applyFunc: applyFunc, applyFunc2: applyFunc2, colorFill: colorFill, colorWithAlpha: colorWithAlpha, spliceAtCaret: spliceAtCaret, FN_HELP: FN_HELP, FN_CONSTS: FN_CONSTS, FUNCTIONS: FUNCTIONS, TWO_ARG_FUNCTIONS: TWO_ARG_FUNCTIONS, styleDash: styleDash, styleCap: styleCap, styleLabel: styleLabel, strokeNum: strokeNum, STYLE_OPTIONS: STYLE_OPTIONS, DEFAULT_STYLE: DEFAULT_STYLE, DEFAULT_STROKE_WIDTH: DEFAULT_STROKE_WIDTH, calligraphyWidth: calligraphyWidth, pencilJitter: pencilJitter, hashUnit: hashUnit, penLabel: penLabel, PEN_OPTIONS: PEN_OPTIONS, DEFAULT_PEN: DEFAULT_PEN, animRowTotals: animRowTotals, animCounts: animCounts, animRate: animRate, animDurationMs: animDurationMs, animBranchCounts: animBranchCounts, ANIM_BASE_MS: ANIM_BASE_MS, ANIM_SPEEDS: ANIM_SPEEDS, animVideoTimes: animVideoTimes, pickVideoMime: pickVideoMime, VIDEO_MIMES: VIDEO_MIMES, ANIM_VIDEO_FPS: ANIM_VIDEO_FPS, videoPushable: videoPushable, videoStrategy: videoStrategy, MP4_VIDEO_CODECS: MP4_VIDEO_CODECS, VIDEO_BITRATE: VIDEO_BITRATE, videoFallbackReason: videoFallbackReason };', sandbox);
 
-const { solveEquation, evalPoly, fmt, parseTerm, buildBranches, evalAst, astStr, applyFunc, applyFunc2, colorFill, colorWithAlpha, spliceAtCaret, FN_HELP, FN_CONSTS, FUNCTIONS, TWO_ARG_FUNCTIONS, styleDash, styleCap, styleLabel, strokeNum, STYLE_OPTIONS, DEFAULT_STYLE, DEFAULT_STROKE_WIDTH, calligraphyWidth, pencilJitter, hashUnit, penLabel, PEN_OPTIONS, DEFAULT_PEN, animRowTotals, animCounts, animRate, animDurationMs, animBranchCounts, ANIM_BASE_MS, ANIM_SPEEDS, animVideoTimes, pickVideoMime, VIDEO_MIMES, ANIM_VIDEO_FPS, videoPushable, videoStrategy, MP4_VIDEO_CODECS, VIDEO_BITRATE } = sandbox.__api;
+const { solveEquation, evalPoly, fmt, parseTerm, buildBranches, evalAst, astStr, applyFunc, applyFunc2, colorFill, colorWithAlpha, spliceAtCaret, FN_HELP, FN_CONSTS, FUNCTIONS, TWO_ARG_FUNCTIONS, styleDash, styleCap, styleLabel, strokeNum, STYLE_OPTIONS, DEFAULT_STYLE, DEFAULT_STROKE_WIDTH, calligraphyWidth, pencilJitter, hashUnit, penLabel, PEN_OPTIONS, DEFAULT_PEN, animRowTotals, animCounts, animRate, animDurationMs, animBranchCounts, ANIM_BASE_MS, ANIM_SPEEDS, animVideoTimes, pickVideoMime, VIDEO_MIMES, ANIM_VIDEO_FPS, videoPushable, videoStrategy, MP4_VIDEO_CODECS, VIDEO_BITRATE, videoFallbackReason } = sandbox.__api;
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -476,6 +476,18 @@ checkErrPolar('polar unknown func', 'r = foo(θ)', 'Unknown function');
   check('mp4 codec ladder is all H.264/AVC',
         MP4_VIDEO_CODECS.every(function (c) { return c.indexOf('avc1.') === 0; }), true);
   check('bitrate is set for the encoder', VIDEO_BITRATE > 0, true);
+
+  // When the export cannot be MP4, the user is told WHY. Reported from Android
+  // Firefox ("still showing webm not mp4"): it has no VideoEncoder at all, so
+  // the .webm arrives for a reason that is invisible from the outside.
+  check('reason: a missing muxer is named',
+        videoFallbackReason({ webcodecs: true, muxer: false }), 'the MP4 muxer did not load');
+  check('reason: no H.264 encoder is named (Firefox for Android)',
+        videoFallbackReason({ webcodecs: false, muxer: true }), 'this browser has no H.264 encoder');
+  check('reason: an otherwise unexplained failure still says something',
+        videoFallbackReason({ webcodecs: true, muxer: true }), 'MP4 encoding is unavailable here');
+  check('reason: junk input still explains itself',
+        videoFallbackReason(null), 'the MP4 muxer did not load');
 }
 
 process.exit(failures === 0 ? 0 : 1);

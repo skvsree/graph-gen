@@ -521,6 +521,10 @@
   </div>
 </div>
 
+<!-- mp4-muxer (MIT, vendored): lets the page write an MP4 itself. Firefox can
+     encode H.264 via WebCodecs but has no MP4 recorder, so the container is
+     muxed here. Deferred: only needed when the user taps the video button. -->
+<script src="/vendor/mp4-muxer.js" defer></script>
 <script>
 'use strict';
 
@@ -1874,64 +1878,193 @@ function animVideoTimes(durationMs, fps, maxFrames) {
   return times;
 }
 
+/* --- MP4 through WebCodecs + the vendored muxer (frame-exact, instant) -------
+
+   MediaRecorder can only give Firefox WebM/VP8 — Firefox has no MP4 recorder.
+   It CAN encode H.264 through WebCodecs though, so when that is available the
+   frames are encoded here and the container is written by mp4-muxer
+   (/vendor/mp4-muxer.js, MIT, loaded as a classic script).
+
+   That path is better wherever it exists: every frame carries an exact
+   timestamp, so the export is frame-for-frame and finishes in about a second
+   instead of recording in real time. MediaRecorder stays as the fallback.
+
+   H.264 has NO alpha channel and the graph canvas is transparent, so frames are
+   composited onto the graph's own card colour first — encoded raw, every empty
+   pixel would come out black, which is what the first version did. */
+
+const MP4_VIDEO_CODECS = ['avc1.42001F', 'avc1.42E01E', 'avc1.4D401E', 'avc1.64001F'];
+const VIDEO_BITRATE = 6000000;
+
+function mp4MuxerLib() {
+  return (typeof window !== 'undefined' && window.Mp4Muxer) ? window.Mp4Muxer : null;
+}
+
+// Which export path can this browser take? Pure, so the node suite covers it.
+//   'webcodecs' — WebCodecs H.264 + the muxer: exact frames, MP4, near-instant
+//   'recorder'  — MediaRecorder: real time, WebM (or MP4 on Chromium/Safari)
+//   null        — nothing that can record
+function videoStrategy(caps) {
+  const c = caps || {};
+  if (c.webcodecs && c.muxer) return 'webcodecs';
+  if (c.recorder && c.recordable) return 'recorder';
+  return null;
+}
+
+// Where frames are actually written: the graph's card colour painted first (the
+// canvas itself is transparent), then the graph on top.
+function videoStage(cv) {
+  const off = document.createElement('canvas');
+  off.width = cv.width;
+  off.height = cv.height;
+  let bg = '#ffffff';
+  try {
+    const host = (cv.closest && cv.closest('.graphbox')) || cv;
+    const c = getComputedStyle(host).backgroundColor;
+    if (c && c !== 'transparent' && c.indexOf('rgba(0, 0, 0, 0)') !== 0) bg = c;
+  } catch (e) {}
+  return { canvas: off, ctx: off.getContext('2d'), bg: bg };
+}
+
+function videoPaint(stage, cv) {
+  stage.ctx.fillStyle = stage.bg;
+  stage.ctx.fillRect(0, 0, stage.canvas.width, stage.canvas.height);
+  stage.ctx.drawImage(cv, 0, 0);
+}
+
+// The first H.264 profile this browser can actually encode, or null.
+async function pickMp4Codec(width, height) {
+  if (typeof VideoEncoder === 'undefined' || !mp4MuxerLib()) return null;
+  for (let i = 0; i < MP4_VIDEO_CODECS.length; i++) {
+    try {
+      const s = await VideoEncoder.isConfigSupported({
+        codec: MP4_VIDEO_CODECS[i], width: width, height: height,
+        bitrate: VIDEO_BITRATE, framerate: ANIM_VIDEO_FPS,
+      });
+      if (s && s.supported) return MP4_VIDEO_CODECS[i];
+    } catch (e) { /* try the next profile */ }
+  }
+  return null;
+}
+
+async function renderMp4(cv, codec, times) {
+  const MP4 = mp4MuxerLib();
+  const stage = videoStage(cv);
+  const target = new MP4.ArrayBufferTarget();
+  const muxer = new MP4.Muxer({
+    target: target,
+    video: { codec: 'avc', width: stage.canvas.width, height: stage.canvas.height },
+    fastStart: 'in-memory',           // moov before mdat: shareable, streamable
+  });
+  let failure = null;
+  const encoder = new VideoEncoder({
+    output: function (chunk, meta) { muxer.addVideoChunk(chunk, meta); },
+    error: function (e) { failure = e; },
+  });
+  encoder.configure({
+    codec: codec,
+    width: stage.canvas.width,
+    height: stage.canvas.height,
+    bitrate: VIDEO_BITRATE,
+    framerate: ANIM_VIDEO_FPS,
+    avc: { format: 'avc' },           // AVCC + description: the MP4 avcC box
+  });
+  const stepUs = Math.round(1000000 / ANIM_VIDEO_FPS);
+  try {
+    for (let i = 0; i < times.length; i++) {
+      anim.t = times[i];
+      animRedraw();
+      videoPaint(stage, cv);
+      const frame = new VideoFrame(stage.canvas, { timestamp: i * stepUs, duration: stepUs });
+      encoder.encode(frame, { keyFrame: i % (ANIM_VIDEO_FPS * 2) === 0 });
+      frame.close();
+      if (failure) throw failure;
+      if (i % 8 === 7) await new Promise(function (r) { setTimeout(r, 0); });
+    }
+    await encoder.flush();
+  } finally {
+    try { encoder.close(); } catch (e) {}
+  }
+  if (failure) throw failure;
+  muxer.finalize();
+  return new Blob([target.buffer], { type: 'video/mp4' });
+}
+
+// The fallback: same reveal, recorded in real time.
+//   push   — captureStream(0) + requestFrame(): one EXACT frame per step
+//   sample — captureStream(fps): the browser samples the canvas while it is
+//            painted. Required on Firefox, whose canvas track has no
+//            requestFrame() (reported live as "track.requestFrame is not a
+//            function"), and on Safari builds that lack it too.
+async function recordWithMediaRecorder(cv, mime, times) {
+  const stage = videoStage(cv);
+  let stream = stage.canvas.captureStream(0);
+  const pushable = videoPushable(stream.getVideoTracks()[0]);
+  if (!pushable) {
+    stream.getTracks().forEach(function (t) { t.stop(); });
+    stream = stage.canvas.captureStream(ANIM_VIDEO_FPS);
+  }
+  const track = stream.getVideoTracks()[0];
+  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: VIDEO_BITRATE });
+  const chunks = [];
+  rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+  const stopped = new Promise(function (res) { rec.onstop = res; });
+  rec.start(250);              // timeslice: chunks arrive throughout, not only at stop
+  await new Promise(function (res) { setTimeout(res, 150); });   // let capture begin
+  for (let i = 0; i < times.length; i++) {
+    anim.t = times[i];
+    animRedraw();
+    videoPaint(stage, cv);
+    if (pushable) track.requestFrame();
+    await new Promise(function (r) { setTimeout(r, 1000 / ANIM_VIDEO_FPS); });
+  }
+  rec.stop();
+  await stopped;
+  if (track.stop) track.stop();
+  return new Blob(chunks, { type: mime });
+}
+
 async function exportVideo() {
   const btn = document.getElementById('animVideo');
   if (!lastCurves) { toast('Plot a graph first.'); return; }
   if (btn && btn.disabled) return;
   const cv = document.getElementById('graph');
-  if (!videoCanRecord(cv)) {
-    const msg = 'This browser cannot record video (no MediaRecorder, no canvas.captureStream, '
-      + 'or no encodable format). Try Chrome, Edge, Firefox or Safari 16.4+.';
+  const picked = (typeof MediaRecorder !== 'undefined')
+    ? pickVideoMime(function (t) { return MediaRecorder.isTypeSupported(t); })
+    : null;
+  const codec = await pickMp4Codec(cv.width, cv.height);
+  const strategy = videoStrategy({
+    webcodecs: !!codec, muxer: !!mp4MuxerLib(),
+    recorder: typeof MediaRecorder !== 'undefined', recordable: picked !== null,
+  });
+  if (!strategy || (strategy === 'recorder' && !videoCanRecord(cv))) {
+    const msg = 'This browser cannot record video (no WebCodecs H.264, no MediaRecorder, '
+      + 'no canvas.captureStream). Try Chrome, Edge, Firefox or Safari 16.4+.';
     showError(msg);
     toast(msg);
     return;
   }
-  const picked = pickVideoMime(function (t) { return MediaRecorder.isTypeSupported(t); });
   const wasPlaying = anim.playing;
   const prevT = anim.t;
   animStop();
   if (btn) btn.disabled = true;
-  toast('Recording the drawing…');
+  toast(strategy === 'webcodecs' ? 'Rendering the video…' : 'Recording the drawing…');
   try {
     const times = animVideoTimes(animDurationMs(anim.speed), ANIM_VIDEO_FPS, ANIM_VIDEO_MAX_FRAMES);
     await new Promise(function (res) { setTimeout(res, 0); });   // let the toast paint
-    // Two ways to feed the recorder:
-    //   push   — captureStream(0) + requestFrame(): one EXACT frame per step
-    //   sample — captureStream(fps): the browser samples the canvas while it is
-    //            painted. This is the path on Firefox, whose canvas track has no
-    //            requestFrame() (reported live as "track.requestFrame is not a
-    //            function"), and on Safari builds that lack it too.
-    let stream = cv.captureStream(0);
-    const pushable = videoPushable(stream.getVideoTracks()[0]);
-    if (!pushable) {
-      stream.getTracks().forEach(function (t) { t.stop(); });
-      stream = cv.captureStream(ANIM_VIDEO_FPS);
+    let blob, ext;
+    if (strategy === 'webcodecs') {
+      blob = await renderMp4(cv, codec, times);        // frame-exact, no real-time wait
+      ext = 'mp4';
+    } else {
+      blob = await recordWithMediaRecorder(cv, picked.mime, times);
+      ext = picked.ext;
     }
-    const track = stream.getVideoTracks()[0];
-    const rec = new MediaRecorder(stream, {
-      mimeType: picked.mime,
-      videoBitsPerSecond: 6000000,
-    });
-    const chunks = [];
-    rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
-    const stopped = new Promise(function (res) { rec.onstop = res; });
-    rec.start(250);              // timeslice: chunks arrive throughout, not only at stop
-    await new Promise(function (res) { setTimeout(res, 150); });   // let capture begin
-    for (let i = 0; i < times.length; i++) {
-      anim.t = times[i];
-      animRedraw();
-      if (pushable) track.requestFrame();
-      await new Promise(function (r) { setTimeout(r, 1000 / ANIM_VIDEO_FPS); });
-    }
-    rec.stop();
-    await stopped;
-    if (track.stop) track.stop();
-    const blob = new Blob(chunks, { type: picked.mime });
-    if (!blob.size) { toast('The recording came out empty — try again.'); return; }
+    if (!blob || !blob.size) { toast('The export came out empty — try again.'); return; }
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'xy-graph-drawing.' + picked.ext;
+    a.download = 'xy-graph-drawing.' + ext;
     document.body.appendChild(a);
     a.click();
     a.remove();

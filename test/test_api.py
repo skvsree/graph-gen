@@ -1148,6 +1148,85 @@ def test_anim_video_export_is_recorded_in_the_browser():
     assert "/api/webp" not in text
 
 
+def test_mp4_is_muxed_in_the_browser_from_webcodecs():
+    """Firefox gets a real MP4: it can't record MP4, but it CAN encode H.264.
+
+    MediaRecorder is unavailable for MP4 on Firefox (video/mp4 -> false), while
+    WebCodecs VideoEncoder handles avc1 there. The only missing piece was the
+    container, so mp4-muxer is vendored and loaded as a classic script — still
+    no server, no build step.
+    """
+    text = client.get("/").text
+    assert '<script src="/vendor/mp4-muxer.js" defer></script>' in text
+    assert "function videoStrategy" in text
+    assert "function pickMp4Codec" in text
+    assert "function renderMp4" in text
+    assert "function mp4MuxerLib" in text
+    assert "VideoEncoder" in text
+    assert "avc: { format: 'avc' }" in text          # AVCC + description -> avcC
+    assert "new MP4.ArrayBufferTarget()" in text
+    assert "muxer.addVideoChunk(chunk, meta)" in text
+    assert "muxer.finalize()" in text
+    assert "fastStart: 'in-memory'" in text          # moov first: streamable share
+    # Timestamps come from the frame index, so the file is frame-exact and the
+    # export does not have to run in real time.
+    assert "timestamp: i * stepUs" in text
+    assert "duration: stepUs" in text
+    assert "codec: 'avc'" in text
+    assert "MP4_VIDEO_CODECS" in text
+    assert "avc1.42001F" in text
+    # The strategy decides between the two paths, and MP4 is the only extension
+    # the WebCodecs path may write.
+    assert "videoStrategy({" in text
+    assert "ext = 'mp4';" in text
+    assert "recordWithMediaRecorder" in text         # fallback kept for WebM
+
+
+def test_video_frames_are_composited_onto_the_card_colour():
+    """H.264 has no alpha: the transparent canvas would encode as BLACK.
+
+    Verified on a real exported frame from the first implementation — the graph
+    came out on a black background instead of the app's own card colour. Every
+    captured frame is therefore composited onto that colour before encoding.
+    """
+    text = client.get("/").text
+    assert "function videoStage" in text
+    assert "function videoPaint" in text
+    assert "fillRect(0, 0, stage.canvas.width, stage.canvas.height)" in text
+    assert "stage.ctx.drawImage(cv, 0, 0)" in text
+    # The colour is read from the graph's own container, so the video matches
+    # whichever theme is active rather than a hardcoded white.
+    assert "closest('.graphbox')" in text
+    assert "getComputedStyle(host).backgroundColor" in text
+    # Both paths must paint the background, not just the new one (count call
+    # sites, including the trailing semicolon, so the definition doesn't match).
+    assert text.count("videoPaint(stage, cv);") == 2
+
+
+def test_vendor_route_serves_whitelisted_assets_only():
+    """Vendored browser code is served by name, like the icons — a flat
+    filename, no traversal, and nothing that isn't actually there."""
+    r = client.get("/vendor/mp4-muxer.js")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/javascript")
+    assert "Mp4Muxer" in r.text
+    assert "window.Mp4Muxer" in r.text or "var Mp4Muxer" in r.text
+    # MIT provenance must travel with the copy.
+    assert "mp4-muxer v5.2.1" in r.text and "MIT" in r.text
+    assert client.get("/vendor/mp4-muxer.LICENSE").status_code == 200
+    # Nothing else is reachable through it.
+    assert client.get("/vendor/nope.js").status_code == 404
+    assert client.get("/vendor/..%2Fapp%2Fmain.py").status_code == 404
+    assert client.get("/vendor/main.py").status_code == 404
+
+
+def test_service_worker_caches_the_vendored_muxer():
+    """The MP4 export must keep working offline in the installed PWA."""
+    sw = client.get("/sw.js").text
+    assert "startsWith('/vendor/')" in sw
+    assert "const VERSION = 'v11';" in sw
+
+
 def test_anim_video_button_is_a_styled_toolbar_button():
     """An icon-only button only looks right via `.form .tool-btn` (the pen menu
     once shipped into the DOM with no CSS at all), so assert the classes."""

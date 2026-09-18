@@ -13,9 +13,9 @@ const sandbox = { console, Math, Number, String, Object, Set, Map, Array, isFini
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 // The guard `typeof document !== 'undefined'` prevents DOM code from running here.
-vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches, evalAst: evalAst, astStr: astStr, applyFunc: applyFunc, applyFunc2: applyFunc2, colorFill: colorFill, colorWithAlpha: colorWithAlpha, spliceAtCaret: spliceAtCaret, FN_HELP: FN_HELP, FN_CONSTS: FN_CONSTS, FUNCTIONS: FUNCTIONS, TWO_ARG_FUNCTIONS: TWO_ARG_FUNCTIONS, styleDash: styleDash, styleCap: styleCap, styleLabel: styleLabel, strokeNum: strokeNum, STYLE_OPTIONS: STYLE_OPTIONS, DEFAULT_STYLE: DEFAULT_STYLE, DEFAULT_STROKE_WIDTH: DEFAULT_STROKE_WIDTH, calligraphyWidth: calligraphyWidth, pencilJitter: pencilJitter, hashUnit: hashUnit, penLabel: penLabel, PEN_OPTIONS: PEN_OPTIONS, DEFAULT_PEN: DEFAULT_PEN, animRowTotals: animRowTotals, animCounts: animCounts, animRate: animRate, animDurationMs: animDurationMs, animBranchCounts: animBranchCounts, ANIM_BASE_MS: ANIM_BASE_MS, ANIM_SPEEDS: ANIM_SPEEDS, animVideoTimes: animVideoTimes, pickVideoMime: pickVideoMime, VIDEO_MIMES: VIDEO_MIMES, ANIM_VIDEO_FPS: ANIM_VIDEO_FPS, videoPushable: videoPushable };', sandbox);
+vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches, evalAst: evalAst, astStr: astStr, applyFunc: applyFunc, applyFunc2: applyFunc2, colorFill: colorFill, colorWithAlpha: colorWithAlpha, spliceAtCaret: spliceAtCaret, FN_HELP: FN_HELP, FN_CONSTS: FN_CONSTS, FUNCTIONS: FUNCTIONS, TWO_ARG_FUNCTIONS: TWO_ARG_FUNCTIONS, styleDash: styleDash, styleCap: styleCap, styleLabel: styleLabel, strokeNum: strokeNum, STYLE_OPTIONS: STYLE_OPTIONS, DEFAULT_STYLE: DEFAULT_STYLE, DEFAULT_STROKE_WIDTH: DEFAULT_STROKE_WIDTH, calligraphyWidth: calligraphyWidth, pencilJitter: pencilJitter, hashUnit: hashUnit, penLabel: penLabel, PEN_OPTIONS: PEN_OPTIONS, DEFAULT_PEN: DEFAULT_PEN, animRowTotals: animRowTotals, animCounts: animCounts, animRate: animRate, animDurationMs: animDurationMs, animBranchCounts: animBranchCounts, ANIM_BASE_MS: ANIM_BASE_MS, ANIM_SPEEDS: ANIM_SPEEDS, animVideoTimes: animVideoTimes, pickVideoMime: pickVideoMime, VIDEO_MIMES: VIDEO_MIMES, ANIM_VIDEO_FPS: ANIM_VIDEO_FPS, videoPushable: videoPushable, videoStrategy: videoStrategy, MP4_VIDEO_CODECS: MP4_VIDEO_CODECS, VIDEO_BITRATE: VIDEO_BITRATE };', sandbox);
 
-const { solveEquation, evalPoly, fmt, parseTerm, buildBranches, evalAst, astStr, applyFunc, applyFunc2, colorFill, colorWithAlpha, spliceAtCaret, FN_HELP, FN_CONSTS, FUNCTIONS, TWO_ARG_FUNCTIONS, styleDash, styleCap, styleLabel, strokeNum, STYLE_OPTIONS, DEFAULT_STYLE, DEFAULT_STROKE_WIDTH, calligraphyWidth, pencilJitter, hashUnit, penLabel, PEN_OPTIONS, DEFAULT_PEN, animRowTotals, animCounts, animRate, animDurationMs, animBranchCounts, ANIM_BASE_MS, ANIM_SPEEDS, animVideoTimes, pickVideoMime, VIDEO_MIMES, ANIM_VIDEO_FPS, videoPushable } = sandbox.__api;
+const { solveEquation, evalPoly, fmt, parseTerm, buildBranches, evalAst, astStr, applyFunc, applyFunc2, colorFill, colorWithAlpha, spliceAtCaret, FN_HELP, FN_CONSTS, FUNCTIONS, TWO_ARG_FUNCTIONS, styleDash, styleCap, styleLabel, strokeNum, STYLE_OPTIONS, DEFAULT_STYLE, DEFAULT_STROKE_WIDTH, calligraphyWidth, pencilJitter, hashUnit, penLabel, PEN_OPTIONS, DEFAULT_PEN, animRowTotals, animCounts, animRate, animDurationMs, animBranchCounts, ANIM_BASE_MS, ANIM_SPEEDS, animVideoTimes, pickVideoMime, VIDEO_MIMES, ANIM_VIDEO_FPS, videoPushable, videoStrategy, MP4_VIDEO_CODECS, VIDEO_BITRATE } = sandbox.__api;
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -453,6 +453,29 @@ checkErrPolar('polar unknown func', 'r = foo(θ)', 'Unknown function');
   check('a track WITHOUT requestFrame is not pushable (Firefox, older Safari)',
         videoPushable({}), false);
   check('a missing track is not pushable', videoPushable(null), false);
+
+  // Export strategy. WebCodecs + the vendored muxer is the good path: exact
+  // frames, MP4 everywhere (Firefox included) and no real-time wait. The
+  // MediaRecorder is the fallback, and it needs an encodable MIME to be usable.
+  check('strategy: WebCodecs + muxer wins over a usable recorder',
+        videoStrategy({ webcodecs: true, muxer: true, recorder: true, recordable: true }), 'webcodecs');
+  check('strategy: no muxer falls back to a usable recorder',
+        videoStrategy({ webcodecs: true, muxer: false, recorder: true, recordable: true }), 'recorder');
+  check('strategy: no H.264 but a usable recorder -> recorder',
+        videoStrategy({ webcodecs: false, muxer: true, recorder: true, recordable: true }), 'recorder');
+  check('strategy: WebCodecs with no muxer and no recorder cannot record',
+        videoStrategy({ webcodecs: true, muxer: false }), null);
+  check('strategy: a recorder with no encodable format cannot record',
+        videoStrategy({ webcodecs: false, muxer: true, recorder: true, recordable: false }), null);
+  check('strategy: nothing available cannot record',
+        videoStrategy({ webcodecs: false, muxer: false, recorder: false, recordable: false }), null);
+  check('strategy: junk input cannot record', videoStrategy(null), null);
+
+  // The H.264 ladder: baseline first (widest support), every entry an AVC profile.
+  check('mp4 codec ladder starts on baseline', MP4_VIDEO_CODECS[0], 'avc1.42001F');
+  check('mp4 codec ladder is all H.264/AVC',
+        MP4_VIDEO_CODECS.every(function (c) { return c.indexOf('avc1.') === 0; }), true);
+  check('bitrate is set for the encoder', VIDEO_BITRATE > 0, true);
 }
 
 process.exit(failures === 0 ? 0 : 1);

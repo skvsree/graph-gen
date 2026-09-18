@@ -371,6 +371,28 @@ def screenshot(name: str) -> FileResponse:
     )
 
 
+# Third-party browser code, vendored so the app needs no build step and no CDN.
+# Served from an explicit whitelisted route like the icons; the service worker
+# caches it, so the MP4 export works offline too.
+#   vendor/mp4-muxer.js — mp4-muxer 5.2.1 (MIT): muxes WebCodecs H.264 output
+#   into an MP4 container, which is how Firefox gets an MP4 (it can encode
+#   H.264 but has no MP4 recorder).
+_VENDOR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+@app.get("/vendor/{name}")
+def vendor(name: str) -> FileResponse:
+    """Whitelisted vendored assets (flat filenames; no traversal)."""
+    if not _VENDOR_RE.fullmatch(name) or not (STATIC_DIR / "vendor" / name).is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    is_js = name.endswith(".js")
+    return FileResponse(
+        STATIC_DIR / "vendor" / name,
+        media_type="application/javascript" if is_js else "text/plain",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(
     request: Request,

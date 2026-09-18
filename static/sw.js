@@ -19,7 +19,7 @@
  * controllerchange handler in templates/index.html.
  */
 
-const VERSION = 'v10';
+const VERSION = 'v11';
 const SHELL_CACHE = 'xygg-shell-' + VERSION;
 const API_CACHE = 'xygg-api-' + VERSION;
 const FONT_CACHE = 'xygg-fonts-' + VERSION;
@@ -183,7 +183,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   if (url.pathname === '/manifest.webmanifest' || url.pathname.startsWith('/icons/')
-      || url.pathname === '/favicon.ico') {
+      || url.pathname.startsWith('/vendor/') || url.pathname === '/favicon.ico') {
     event.respondWith(cacheFirst(request));
     return;
   }

@@ -35,11 +35,29 @@ carries ▶ play/pause, a **scrub** slider you can drag to stop the drawing
 anywhere, a **speed** menu (0.5×/1×/2×/4× — the longest curve takes 4 s at 1×),
 an **auto-play** toggle that redraws every new plot, and a **video button** that
 records the drawing and downloads it as `xy-graph-drawing.mp4` (`.webm` where a
-browser cannot encode MP4). Recording happens **entirely in the browser**
-(MediaRecorder over the canvas: nothing is uploaded, no server round-trip, and
-it keeps working offline in the installed app) — so an export takes as long as
-the drawing itself, about 4 s at 1×. Speed and auto-play are remembered per
-device.
+browser cannot encode MP4). Recording happens **entirely in the browser** —
+nothing is uploaded, no server round-trip, and it keeps working offline in the
+installed app. Speed and auto-play are remembered per device.
+
+Two paths produce that file, chosen at runtime by capability:
+
+* **WebCodecs + a vendored muxer** (preferred) — the frames are encoded as H.264
+  through `VideoEncoder` and the MP4 container is written by
+  [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) (MIT, vendored at
+  `static/vendor/mp4-muxer.js`, served from `/vendor/`, cached by the service
+  worker). Each frame carries an exact timestamp, so the file is frame-for-frame
+  with the reveal and no longer has to be recorded in real time — on Chromium the
+  export finishes in well under a second.
+* **MediaRecorder** (fallback) — used when WebCodecs H.264 or the muxer is
+  missing. It records in real time, so an export takes about as long as the
+  drawing itself (~4 s at 1×), and the format follows the browser (MP4/H.264 on
+  Chromium and Safari, WebM/VP8 on Firefox).
+
+Frame capture is **composited onto the graph's own card colour** first. The
+canvas is transparent and H.264 has no alpha channel, so encoding it raw turned
+every empty pixel black — the video showed a black background instead of the
+app's white/dark one. Reading the colour from `.graphbox` keeps the video
+matching whichever theme is active.
 
 **Plot up to 5 formulas at once** ("+ Add formula" adds an input row). Each
 row owns its curve's **colours** — a device picker, a **hex box** taking any

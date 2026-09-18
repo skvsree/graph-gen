@@ -1136,6 +1136,14 @@ def test_anim_video_export_is_recorded_in_the_browser():
     # Frames are timestamped by the wall clock, so they must be spaced — pushed
     # in a tight loop the video would play back instantly.
     assert "setTimeout(r, 1000 / ANIM_VIDEO_FPS)" in text
+    # Browsers whose canvas track has no requestFrame() (Firefox, reported live
+    # as "track.requestFrame is not a function") must fall back to sampling the
+    # canvas in real time rather than failing the export.
+    assert "function videoPushable" in text
+    assert "captureStream(ANIM_VIDEO_FPS)" in text
+    assert "if (pushable) track.requestFrame();" in text
+    # A failure must stay on screen: the toast self-hides after 2.6s.
+    assert "showError(msg)" in text
     # ...and nothing may reach for a server-side encoder.
     assert "/api/webp" not in text
 

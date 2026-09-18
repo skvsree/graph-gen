@@ -13,9 +13,9 @@ const sandbox = { console, Math, Number, String, Object, Set, Map, Array, isFini
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 // The guard `typeof document !== 'undefined'` prevents DOM code from running here.
-vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches, evalAst: evalAst, astStr: astStr, applyFunc: applyFunc, applyFunc2: applyFunc2, colorFill: colorFill, colorWithAlpha: colorWithAlpha, spliceAtCaret: spliceAtCaret, FN_HELP: FN_HELP, FN_CONSTS: FN_CONSTS, FUNCTIONS: FUNCTIONS, TWO_ARG_FUNCTIONS: TWO_ARG_FUNCTIONS, styleDash: styleDash, styleCap: styleCap, styleLabel: styleLabel, strokeNum: strokeNum, STYLE_OPTIONS: STYLE_OPTIONS, DEFAULT_STYLE: DEFAULT_STYLE, DEFAULT_STROKE_WIDTH: DEFAULT_STROKE_WIDTH, calligraphyWidth: calligraphyWidth, pencilJitter: pencilJitter, hashUnit: hashUnit, penLabel: penLabel, PEN_OPTIONS: PEN_OPTIONS, DEFAULT_PEN: DEFAULT_PEN, animRowTotals: animRowTotals, animCounts: animCounts, animRate: animRate, animDurationMs: animDurationMs, animBranchCounts: animBranchCounts, ANIM_BASE_MS: ANIM_BASE_MS, ANIM_SPEEDS: ANIM_SPEEDS, animVideoTimes: animVideoTimes, pickVideoMime: pickVideoMime, VIDEO_MIMES: VIDEO_MIMES, ANIM_VIDEO_FPS: ANIM_VIDEO_FPS };', sandbox);
+vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches, evalAst: evalAst, astStr: astStr, applyFunc: applyFunc, applyFunc2: applyFunc2, colorFill: colorFill, colorWithAlpha: colorWithAlpha, spliceAtCaret: spliceAtCaret, FN_HELP: FN_HELP, FN_CONSTS: FN_CONSTS, FUNCTIONS: FUNCTIONS, TWO_ARG_FUNCTIONS: TWO_ARG_FUNCTIONS, styleDash: styleDash, styleCap: styleCap, styleLabel: styleLabel, strokeNum: strokeNum, STYLE_OPTIONS: STYLE_OPTIONS, DEFAULT_STYLE: DEFAULT_STYLE, DEFAULT_STROKE_WIDTH: DEFAULT_STROKE_WIDTH, calligraphyWidth: calligraphyWidth, pencilJitter: pencilJitter, hashUnit: hashUnit, penLabel: penLabel, PEN_OPTIONS: PEN_OPTIONS, DEFAULT_PEN: DEFAULT_PEN, animRowTotals: animRowTotals, animCounts: animCounts, animRate: animRate, animDurationMs: animDurationMs, animBranchCounts: animBranchCounts, ANIM_BASE_MS: ANIM_BASE_MS, ANIM_SPEEDS: ANIM_SPEEDS, animVideoTimes: animVideoTimes, pickVideoMime: pickVideoMime, VIDEO_MIMES: VIDEO_MIMES, ANIM_VIDEO_FPS: ANIM_VIDEO_FPS, videoPushable: videoPushable };', sandbox);
 
-const { solveEquation, evalPoly, fmt, parseTerm, buildBranches, evalAst, astStr, applyFunc, applyFunc2, colorFill, colorWithAlpha, spliceAtCaret, FN_HELP, FN_CONSTS, FUNCTIONS, TWO_ARG_FUNCTIONS, styleDash, styleCap, styleLabel, strokeNum, STYLE_OPTIONS, DEFAULT_STYLE, DEFAULT_STROKE_WIDTH, calligraphyWidth, pencilJitter, hashUnit, penLabel, PEN_OPTIONS, DEFAULT_PEN, animRowTotals, animCounts, animRate, animDurationMs, animBranchCounts, ANIM_BASE_MS, ANIM_SPEEDS, animVideoTimes, pickVideoMime, VIDEO_MIMES, ANIM_VIDEO_FPS } = sandbox.__api;
+const { solveEquation, evalPoly, fmt, parseTerm, buildBranches, evalAst, astStr, applyFunc, applyFunc2, colorFill, colorWithAlpha, spliceAtCaret, FN_HELP, FN_CONSTS, FUNCTIONS, TWO_ARG_FUNCTIONS, styleDash, styleCap, styleLabel, strokeNum, STYLE_OPTIONS, DEFAULT_STYLE, DEFAULT_STROKE_WIDTH, calligraphyWidth, pencilJitter, hashUnit, penLabel, PEN_OPTIONS, DEFAULT_PEN, animRowTotals, animCounts, animRate, animDurationMs, animBranchCounts, ANIM_BASE_MS, ANIM_SPEEDS, animVideoTimes, pickVideoMime, VIDEO_MIMES, ANIM_VIDEO_FPS, videoPushable } = sandbox.__api;
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -445,6 +445,14 @@ checkErrPolar('polar unknown func', 'r = foo(θ)', 'Unknown function');
         pickVideoMime(() => { throw new Error('nope'); }), null);
   check('mime ladder is ordered mp4 -> webm',
         [VIDEO_MIMES[0][1], VIDEO_MIMES[VIDEO_MIMES.length - 1][1]], ['mp4', 'webm']);
+
+  // Firefox's canvas track has no requestFrame() (reported live from the site:
+  // "track.requestFrame is not a function"), so the export must be able to fall
+  // back to sampling the canvas in real time.
+  check('a track with requestFrame is pushable', videoPushable({ requestFrame: function () {} }), true);
+  check('a track WITHOUT requestFrame is not pushable (Firefox, older Safari)',
+        videoPushable({}), false);
+  check('a missing track is not pushable', videoPushable(null), false);
 }
 
 process.exit(failures === 0 ? 0 : 1);

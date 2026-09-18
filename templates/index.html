@@ -1850,6 +1850,15 @@ function videoCanRecord(cv) {
     && pickVideoMime(function (t) { return MediaRecorder.isTypeSupported(t); }) !== null;
 }
 
+// Can frames be pushed by hand? `captureStream(0)` gives exact frames via
+// requestFrame() — but Firefox's canvas track has NO requestFrame(), and some
+// Safari builds lack it too. Those browsers can still record: they just SAMPLE
+// the canvas while it is being painted. `videoPushable` is pure so the node
+// suite covers both branches.
+function videoPushable(track) {
+  return !!track && typeof track.requestFrame === 'function';
+}
+
 // The frame times the export draws: 0 → the complete graph, and the LAST frame
 // is t = -1 (the finished state), not t = duration — that is the state the
 // player itself ends on. Pure, so the node suite covers the plan.
@@ -1871,7 +1880,10 @@ async function exportVideo() {
   if (btn && btn.disabled) return;
   const cv = document.getElementById('graph');
   if (!videoCanRecord(cv)) {
-    toast('This browser cannot record video — try Chrome, Edge or Safari.');
+    const msg = 'This browser cannot record video (no MediaRecorder, no canvas.captureStream, '
+      + 'or no encodable format). Try Chrome, Edge, Firefox or Safari 16.4+.';
+    showError(msg);
+    toast(msg);
     return;
   }
   const picked = pickVideoMime(function (t) { return MediaRecorder.isTypeSupported(t); });
@@ -1882,9 +1894,19 @@ async function exportVideo() {
   toast('Recording the drawing…');
   try {
     const times = animVideoTimes(animDurationMs(anim.speed), ANIM_VIDEO_FPS, ANIM_VIDEO_MAX_FRAMES);
-    const more = new Promise(function (res) { setTimeout(res, 0); });
-    await more;                                   // let the toast paint first
-    const stream = cv.captureStream(0);           // 0 = manual frame push
+    await new Promise(function (res) { setTimeout(res, 0); });   // let the toast paint
+    // Two ways to feed the recorder:
+    //   push   — captureStream(0) + requestFrame(): one EXACT frame per step
+    //   sample — captureStream(fps): the browser samples the canvas while it is
+    //            painted. This is the path on Firefox, whose canvas track has no
+    //            requestFrame() (reported live as "track.requestFrame is not a
+    //            function"), and on Safari builds that lack it too.
+    let stream = cv.captureStream(0);
+    const pushable = videoPushable(stream.getVideoTracks()[0]);
+    if (!pushable) {
+      stream.getTracks().forEach(function (t) { t.stop(); });
+      stream = cv.captureStream(ANIM_VIDEO_FPS);
+    }
     const track = stream.getVideoTracks()[0];
     const rec = new MediaRecorder(stream, {
       mimeType: picked.mime,
@@ -1893,11 +1915,12 @@ async function exportVideo() {
     const chunks = [];
     rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
     const stopped = new Promise(function (res) { rec.onstop = res; });
-    rec.start();
+    rec.start(250);              // timeslice: chunks arrive throughout, not only at stop
+    await new Promise(function (res) { setTimeout(res, 150); });   // let capture begin
     for (let i = 0; i < times.length; i++) {
       anim.t = times[i];
       animRedraw();
-      track.requestFrame();
+      if (pushable) track.requestFrame();
       await new Promise(function (r) { setTimeout(r, 1000 / ANIM_VIDEO_FPS); });
     }
     rec.stop();
@@ -1915,7 +1938,9 @@ async function exportVideo() {
     setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
     flashButton(btn, 'Video saved');
   } catch (e) {
-    toast('Video export failed: ' + errorText(e && e.message ? e.message : e));
+    const msg = 'Video export failed: ' + errorText(e && e.message ? e.message : e);
+    showError(msg);        // the toast is gone in 2.6s — keep the text readable
+    toast(msg);
   } finally {
     if (btn) btn.disabled = false;
     anim.t = prevT;              // put the canvas back where the user left it
@@ -1976,13 +2001,13 @@ function initAnim() {
     });
   }
   // The video download: recording happens in the browser (see exportVideo).
-  // A browser that can encode nothing keeps the button, inert, with the reason
-  // in its tooltip — better than a control that silently does nothing.
+  // It is never DISABLED — a dead icon on a phone (where tooltips are
+  // invisible) is indistinguishable from a broken feature, so a tap must
+  // always explain itself instead.
   const video = document.getElementById('animVideo');
   if (video) {
     if (!videoCanRecord(document.getElementById('graph'))) {
-      video.disabled = true;
-      video.title = 'Video export is not supported in this browser';
+      video.title = 'Video export needs MediaRecorder + canvas.captureStream — not available in this browser';
       video.setAttribute('aria-label', video.title);
     }
     video.addEventListener('click', exportVideo);

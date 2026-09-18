@@ -78,12 +78,12 @@
      select (19px tall, Arial, square, grey, `appearance: auto`) sitting next to
      this themed menu. Never style one of the two alone. */
   .penstyle { display: inline-flex; align-items: flex-end; gap: 8px; flex: none; }
-  .form select.pen-pick, .form select.style-pick {
+  .form select.pen-pick, .form select.style-pick, .form select.anim-speed {
     width: 112px; padding: 8px 6px; font-size: 13px; font-family: inherit;
     border: 1px solid var(--border); border-radius: 8px; background: var(--card);
     color: var(--fg); cursor: pointer;
   }
-  .form select.pen-pick:focus, .form select.style-pick:focus {
+  .form select.pen-pick:focus, .form select.style-pick:focus, .form select.anim-speed:focus {
     outline: 2px solid var(--input-focus); border-color: #2563eb;
   }
   /* Both menus carry the micro-label the same way (the pen one was rendering
@@ -212,6 +212,20 @@
   .tool-sep { width: 1px; height: 22px; background: var(--border); flex: none; margin: 0 1px; }
   /* Tick confirmation on the icon-only buttons (see flashButton). */
   .tool-btn.flash-ok { color: #16a34a; border-color: #16a34a; }
+  /* Draw-animation player. The bar carries `class="form"` (see the markup), so
+     it inherits the form's button and select styling — the scrub bar and the
+     two small labels are the only new controls. */
+  .anim-bar { margin: 10px 0 2px; }
+  .anim-scrub { flex: 1 1 180px; min-width: 120px; height: 24px; accent-color: #2563eb; }
+  .anim-lbl, .anim-auto {
+    font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px;
+  }
+  .anim-auto { cursor: pointer; }
+  .anim-auto input { margin: 0; accent-color: #2563eb; }
+  .anim-pct {
+    font-size: 12px; color: var(--muted); min-width: 40px; text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
   /* Install hint (iOS Safari has no beforeinstallprompt, so the button
      explains the Share → Add to Home Screen route instead). */
   .install-hint {
@@ -461,6 +475,35 @@
   <div class="graphbox">
     <canvas id="graph" width="900" height="640"></canvas>
     <div class="meta" id="meta"></div>
+  </div>
+
+  <!-- Draw animation: the graph traces itself point by point. A `class="form"`
+       bar under the canvas so it reuses the form's button/select styling. The
+       reveal is purely a view effect (no solver, API, URL or table change). -->
+  <div class="form anim-bar" id="animBar">
+    <button type="button" class="btn-secondary tool-btn tool-toggle" id="animPlay"
+            title="Draw the graph point by point" aria-label="Draw the graph point by point" aria-pressed="false">
+      <svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="f" d="M6 3.4 14.4 9 6 14.6Z"/></svg>
+    </button>
+    <input type="range" class="anim-scrub" id="animScrub" min="0" max="1000" step="1" value="1000"
+           title="Drag to scrub through the drawing — the graph is revealed up to where you stop"
+           aria-label="Drawing progress">
+    <span class="anim-lbl" id="animPct">100%</span>
+    <label class="anim-lbl" for="animSpeed">speed</label>
+    <select class="anim-speed" id="animSpeed" title="How fast the graph draws — the longest curve takes about 4s at 1x; a shorter curve lands sooner at any speed">
+      <option value="0.5">0.5&times;</option>
+      <option value="1" selected>1&times;</option>
+      <option value="2">2&times;</option>
+      <option value="4">4&times;</option>
+    </select>
+    <label class="anim-auto" for="animAuto" title="Play the drawing automatically every time the graph is plotted (remembered on this device)">
+      <input type="checkbox" id="animAuto"> auto-play
+    </label>
+    <button type="button" class="btn-secondary tool-btn" id="animVideo"
+            title="Download the drawing as a video — records the graph drawing itself in your browser (plays the drawing once while recording, ~4s at 1x)"
+            aria-label="Download video">
+      <svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><rect class="s" x="2.6" y="3.8" width="12.8" height="10.4" rx="2.2"/><path class="f" d="M7.5 6.9 11.8 9l-4.3 2.1Z"/></svg>
+    </button>
   </div>
 
   <div class="tablebox">
@@ -1572,6 +1615,381 @@ function palette() { return currentTheme() === 'dark' ? PALETTES.dark : PALETTES
 
 function redraw() { if (lastCurves) draw(lastCurves); }
 
+/* ============ draw animation: the graph draws itself point by point =========
+
+   Purely a VIEW effect, like the Grid/Axis toggles: the reveal happens inside
+   draw(), and the solver, /api/points, the twin parity corpus, the legend, the
+   points table and the share URL are all untouched (the table shows every
+   point while the drawing is still growing).
+
+   Every row advances at the SAME points-per-millisecond rate, so a row with
+   fewer points lands sooner — a short curve finishes before a long one, and
+   the longest row takes ANIM_BASE_MS / speed in total.
+
+   `anim.t` is the elapsed animation time in milliseconds:
+     t < 0    nothing animating — every branch is drawn whole
+     t >= 0   mid-flight (playing, paused or scrubbed) — reveal per row
+
+   The reveal walks each branch by INDEX, and the branches of a row are in
+   order along the curve, so a function traces left → right, a polar curve
+   sweeps forward in θ, and a curve broken by an asymptote (tan, 1/x) is traced
+   one branch at a time instead of growing out of every branch at once. The
+   sample markers appear as the trace reaches them (the marker loop runs over
+   the revealed prefix), and the view still scales to the complete data, so the
+   axes never jump while the drawing grows.
+
+   `Math.random()` is banned here too — the reveal is a pure function of `t`,
+   so a replayed drawing is identical frame for frame. Playback is opt-in
+   (auto-play is off by default and remembered), so nobody is animated at
+   unprompted. */
+
+const ANIM_SPEEDS = [0.5, 1, 2, 4];   // the speed menu, in order (mirrors the <option>s)
+const ANIM_BASE_MS = 4000;            // 1x: the longest row takes this long (was 2600 — "a little slower")
+const anim = { playing: false, t: -1, speed: 1, auto: false, raf: 0, last: 0 };
+
+const ANIM_ICON = {
+  play: '<svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="f" d="M6 3.4 14.4 9 6 14.6Z"/></svg>',
+  pause: '<svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="f" d="M5.3 3.4h2.7v11.2H5.3z"/><path class="f" d="M10 3.4h2.7v11.2H10z"/></svg>',
+};
+
+// Points per row, summed over its branches: the row's reveal budget.
+function animRowTotals(curves) {
+  return curves.map(function (c) {
+    return c.branches.reduce(function (n, b) { return n + b.points.length; }, 0);
+  });
+}
+
+// Points revealed per row after `t` ms at `rate` points/ms. All rows share the
+// rate (fewer points ⇒ finishes sooner) and each clamps at its own total.
+// t < 0 means "not animating": every row is complete.
+function animCounts(totals, t, rate) {
+  if (t < 0) return totals.slice();
+  const whole = Math.floor(t * rate);
+  return totals.map(function (n) {
+    const shown = whole < 0 ? 0 : whole;
+    return shown > n ? n : shown;
+  });
+}
+
+// Points per millisecond: the row with the most points takes exactly
+// ANIM_BASE_MS / speed. A graph with no points yields 0 — the playback still
+// ends, because the tick stops on elapsed TIME, not on progress.
+function animRate(totals, speed) {
+  const longest = totals.reduce(function (m, n) { return n > m ? n : m; }, 0);
+  return longest > 0 ? longest / animDurationMs(speed) : 0;
+}
+
+function animDurationMs(speed) {
+  const s = Number(speed);
+  return ANIM_BASE_MS / (isFinite(s) && s > 0 ? s : 1);
+}
+
+// Split one row's revealed count across its branches IN ORDER: branch 1 is
+// traced completely before branch 2 starts. Pure, so the node suite covers it.
+function animBranchCounts(branchCounts, revealed) {
+  let left = revealed < 0 ? 0 : revealed;
+  return branchCounts.map(function (n) {
+    const take = left <= 0 ? 0 : (left > n ? n : left);
+    left -= take;
+    return take;
+  });
+}
+
+// Per-row reveal for the current state, or null when nothing is animating.
+function animReveal(curves) {
+  if (anim.t < 0 || !curves || !curves.length) return null;
+  const totals = animRowTotals(curves);
+  return { counts: animCounts(totals, anim.t, animRate(totals, anim.speed)), totals: totals };
+}
+
+// --- animation controls ----------------------------------------------------
+
+function animProgress() {                     // 0…1, drives the scrub bar
+  if (anim.t < 0) return 1;
+  const d = animDurationMs(anim.speed);
+  return d > 0 ? Math.min(1, anim.t / d) : 1;
+}
+
+function animRedraw() { if (lastCurves) draw(lastCurves); }
+
+function animSync() {
+  const btn = document.getElementById('animPlay');
+  const scrub = document.getElementById('animScrub');
+  const pct = document.getElementById('animPct');
+  const f = animProgress();
+  if (btn) {
+    btn.innerHTML = anim.playing ? ANIM_ICON.pause : ANIM_ICON.play;
+    btn.classList.toggle('on', anim.playing);
+    btn.setAttribute('aria-pressed', anim.playing ? 'true' : 'false');
+    const label = anim.playing ? 'Pause the drawing'
+                              : (f >= 1 ? 'Draw the graph point by point' : 'Resume the drawing');
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+  }
+  // Never fight the user's own drag of the handle.
+  if (scrub && document.activeElement !== scrub) scrub.value = String(Math.round(f * 1000));
+  if (pct) pct.textContent = Math.round(f * 100) + '%';
+}
+
+function animStop() {
+  anim.playing = false;
+  if (anim.raf) { cancelAnimationFrame(anim.raf); anim.raf = 0; }
+  anim.last = 0;
+}
+
+function animTick(ts) {
+  if (!anim.playing) return;
+  if (!anim.last) anim.last = ts;
+  // Clamp the step: a backgrounded tab hands back one huge delta, which would
+  // otherwise teleport the drawing to its end.
+  anim.t += Math.min(ts - anim.last, 120);
+  anim.last = ts;
+  if (anim.t >= animDurationMs(anim.speed)) {
+    animStop();
+    anim.t = -1;                    // finished → the complete graph
+    animRedraw();
+    animSync();
+    return;
+  }
+  animRedraw();
+  animSync();
+  anim.raf = requestAnimationFrame(animTick);
+}
+
+function animPlay(fromStart) {
+  if (!lastCurves) return;
+  if (fromStart || anim.t >= animDurationMs(anim.speed)) anim.t = 0;
+  animStop();
+  anim.playing = true;
+  anim.last = 0;
+  anim.raf = requestAnimationFrame(animTick);
+  animRedraw();
+  animSync();
+}
+
+function animToggle() {
+  if (anim.playing) { animStop(); animSync(); return; }
+  animPlay(false);
+}
+
+// Dragging the scrub takes over: playback pauses and the canvas follows the
+// handle. 100% is stored as t = -1 (finished), so later redraws are whole.
+function animScrubTo(f) {
+  animStop();
+  const clamped = f < 0 ? 0 : (f > 1 ? 1 : f);
+  anim.t = clamped >= 1 ? -1 : clamped * animDurationMs(anim.speed);
+  animRedraw();
+  animSync();
+}
+
+// A new plot always starts from the COMPLETE graph: an animation left paused
+// half-way must never leak into the next plot.
+function animReset() {
+  animStop();
+  anim.t = -1;
+  animSync();
+}
+
+// An export of a half-drawn animation would be a picture of a partly drawn
+// graph, so both export paths finish the drawing first (and leave it finished —
+// that is what the user is looking at afterwards). Returns true when it had to.
+function animFinishForExport() {
+  if (anim.t < 0) return false;
+  animStop();
+  anim.t = -1;
+  animSync();
+  animRedraw();
+  return true;
+}
+
+/* --- video export: recorded in the browser, nothing uploaded ----------------
+
+   MediaRecorder encodes what the canvas paints, so the download is produced
+   entirely client-side: the reveal is replayed through the same pure
+   `anim.t` → draw() path the player uses, each frame is pushed with
+   `requestFrame()`, and the resulting Blob is saved as a video file. No server
+   endpoint, no dependency, no upload — and it keeps working offline in the
+   installed PWA.
+
+   The one cost is that recording runs in REAL TIME: a 4s drawing takes 4s to
+   export. Frames are paced at ANIM_VIDEO_FPS because `requestFrame()`
+   timestamps them by the wall clock — pushing them in a tight loop would
+   produce a video that plays back instantly.
+
+   Format follows what the browser can actually encode: Chromium and Firefox
+   write WebM (VP9/VP8), Safari only MP4/H.264 — hence the ladder. */
+
+const ANIM_VIDEO_FPS = 25;        // capture rate of the exported video
+const ANIM_VIDEO_MAX_FRAMES = 400;  // 16s at 25fps: far beyond any real drawing
+
+// Candidate container/codec pairs, best first. Safari records MP4/H.264 only;
+// Chromium/Firefox record WebM. Keep both families so phones work too.
+const VIDEO_MIMES = [
+  ['video/mp4;codecs=avc1.42E01E', 'mp4'],
+  ['video/mp4', 'mp4'],
+  ['video/webm;codecs=vp9', 'webm'],
+  ['video/webm;codecs=vp8', 'webm'],
+  ['video/webm', 'webm'],
+];
+
+// First candidate the browser can encode, or null when it can record nothing.
+// Pure — pass `MediaRecorder.isTypeSupported` (or a stub) as `isSupported`.
+function pickVideoMime(isSupported) {
+  for (let i = 0; i < VIDEO_MIMES.length; i++) {
+    const pair = VIDEO_MIMES[i];
+    try {
+      if (isSupported(pair[0])) return { mime: pair[0], ext: pair[1] };
+    } catch (e) { /* a throwing probe just means "not supported" */ }
+  }
+  return null;
+}
+
+function videoCanRecord(cv) {
+  return typeof MediaRecorder !== 'undefined'
+    && !!cv && typeof cv.captureStream === 'function'
+    && pickVideoMime(function (t) { return MediaRecorder.isTypeSupported(t); }) !== null;
+}
+
+// The frame times the export draws: 0 → the complete graph, and the LAST frame
+// is t = -1 (the finished state), not t = duration — that is the state the
+// player itself ends on. Pure, so the node suite covers the plan.
+function animVideoTimes(durationMs, fps, maxFrames) {
+  const d = Math.max(1, Number(durationMs) || 1);
+  const f = Math.max(1, Number(fps) || 1);
+  const cap = Math.max(2, Number(maxFrames) || 2);
+  let n = Math.round((d / 1000) * f);
+  if (n > cap - 1) n = cap - 1;
+  if (n < 1) n = 1;
+  const times = [];
+  for (let i = 0; i <= n; i++) times.push(i === n ? -1 : (i / n) * d);
+  return times;
+}
+
+async function exportVideo() {
+  const btn = document.getElementById('animVideo');
+  if (!lastCurves) { toast('Plot a graph first.'); return; }
+  if (btn && btn.disabled) return;
+  const cv = document.getElementById('graph');
+  if (!videoCanRecord(cv)) {
+    toast('This browser cannot record video — try Chrome, Edge or Safari.');
+    return;
+  }
+  const picked = pickVideoMime(function (t) { return MediaRecorder.isTypeSupported(t); });
+  const wasPlaying = anim.playing;
+  const prevT = anim.t;
+  animStop();
+  if (btn) btn.disabled = true;
+  toast('Recording the drawing…');
+  try {
+    const times = animVideoTimes(animDurationMs(anim.speed), ANIM_VIDEO_FPS, ANIM_VIDEO_MAX_FRAMES);
+    const more = new Promise(function (res) { setTimeout(res, 0); });
+    await more;                                   // let the toast paint first
+    const stream = cv.captureStream(0);           // 0 = manual frame push
+    const track = stream.getVideoTracks()[0];
+    const rec = new MediaRecorder(stream, {
+      mimeType: picked.mime,
+      videoBitsPerSecond: 6000000,
+    });
+    const chunks = [];
+    rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+    const stopped = new Promise(function (res) { rec.onstop = res; });
+    rec.start();
+    for (let i = 0; i < times.length; i++) {
+      anim.t = times[i];
+      animRedraw();
+      track.requestFrame();
+      await new Promise(function (r) { setTimeout(r, 1000 / ANIM_VIDEO_FPS); });
+    }
+    rec.stop();
+    await stopped;
+    if (track.stop) track.stop();
+    const blob = new Blob(chunks, { type: picked.mime });
+    if (!blob.size) { toast('The recording came out empty — try again.'); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'xy-graph-drawing.' + picked.ext;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+    flashButton(btn, 'Video saved');
+  } catch (e) {
+    toast('Video export failed: ' + errorText(e && e.message ? e.message : e));
+  } finally {
+    if (btn) btn.disabled = false;
+    anim.t = prevT;              // put the canvas back where the user left it
+    animStop();
+    animRedraw();
+    animSync();
+    if (wasPlaying) animPlay(false);
+  }
+}
+
+function animSavePrefs() {
+  try {
+    localStorage.setItem('xygh:anim:speed', String(anim.speed));
+    localStorage.setItem('xygh:anim:auto', anim.auto ? '1' : '0');
+  } catch (e) {}
+}
+
+function animLoadPrefs() {
+  try {
+    const s = parseFloat(localStorage.getItem('xygh:anim:speed') || '');
+    if (ANIM_SPEEDS.indexOf(s) !== -1) anim.speed = s;
+    anim.auto = localStorage.getItem('xygh:anim:auto') === '1';
+  } catch (e) {}
+}
+
+function initAnim() {
+  const btn = document.getElementById('animPlay');
+  if (!btn) return;                      // no player on this page
+  animLoadPrefs();
+  const speed = document.getElementById('animSpeed');
+  const scrub = document.getElementById('animScrub');
+  const auto = document.getElementById('animAuto');
+  if (speed) speed.value = String(anim.speed);
+  if (auto) auto.checked = anim.auto;
+  btn.addEventListener('click', animToggle);
+  if (speed) {
+    speed.addEventListener('change', function () {
+      const next = parseFloat(speed.value);
+      if (ANIM_SPEEDS.indexOf(next) === -1) return;
+      const f = animProgress();           // keep the drawing where it is
+      anim.speed = next;
+      if (anim.t >= 0 && f < 1) anim.t = f * animDurationMs(anim.speed);
+      animSavePrefs();
+      animRedraw();
+      animSync();
+    });
+  }
+  if (scrub) {
+    scrub.addEventListener('input', function () {
+      animScrubTo(parseInt(scrub.value, 10) / 1000);
+    });
+  }
+  if (auto) {
+    auto.addEventListener('change', function () {
+      anim.auto = auto.checked;
+      animSavePrefs();
+      if (anim.auto) animPlay(true);      // immediate feedback for the toggle
+    });
+  }
+  // The video download: recording happens in the browser (see exportVideo).
+  // A browser that can encode nothing keeps the button, inert, with the reason
+  // in its tooltip — better than a control that silently does nothing.
+  const video = document.getElementById('animVideo');
+  if (video) {
+    if (!videoCanRecord(document.getElementById('graph'))) {
+      video.disabled = true;
+      video.title = 'Video export is not supported in this browser';
+      video.setAttribute('aria-label', video.title);
+    }
+    video.addEventListener('click', exportVideo);
+  }
+  animSync();
+}
+
 // Paint for one branch: a flat rgba string, or a canvas linear gradient that
 // fades the row's first colour into its second along the branch. The axis runs
 // from the branch's first to its last point in screen space (left → right for
@@ -1609,6 +2027,12 @@ function draw(curves) {
   const W = cv.width, H = cv.height;
   const pal = palette();
   ctx.clearRect(0, 0, W, H);
+
+  // Draw animation: when a playback/scrub is in flight, each row is revealed up
+  // to its own point count and the pens only see the revealed prefix. The view
+  // (below) still scales to the COMPLETE data, so the axes never jump while the
+  // drawing grows. `reveal` is null in the normal case — every branch whole.
+  const reveal = animReveal(curves);
 
   const all = [];
   curves.forEach(c => c.branches.forEach(br => { for (const p of br.points) all.push(p); }));
@@ -1680,34 +2104,56 @@ function draw(curves) {
   // The polyline breaks when two consecutive samples jump across a vertical
   // asymptote (tan, 1/x) so no false line is drawn through the wall — every
   // pen honours that (calligraphy skips the segment instead of drawing a quad).
-  curves.forEach(function (curve) {
+  curves.forEach(function (curve, ci) {
+    // How many of this row's points the animation has reached (Infinity = all).
+    let budget = reveal ? reveal.counts[ci] : Infinity;
     // Inequality shading first (translucent fill), then the crisp boundary.
-    if (curve.inequality) drawInequalityShade(ctx, curve, X, Y, W, H);
+    // The tint fades in with the row's progress, so a shaded region arrives
+    // with its boundary instead of popping in at the end.
+    if (curve.inequality) {
+      const frac = reveal ? ((reveal.totals[ci] > 0) ? (budget / reveal.totals[ci]) : 1) : 1;
+      drawInequalityShade(ctx, curve, X, Y, W, H, frac);
+    }
     const curvePen = curve.pen || DEFAULT_PEN;
     curve.branches.forEach(function (br) {
-      if (!br.points.length) return;
+      // Reveal across a row's branches IN ORDER: branch 1 is traced completely
+      // before branch 2 starts, so a curve broken by an asymptote (tan, 1/x)
+      // draws left → right instead of growing out of every branch at once.
+      let shown = br;
+      if (reveal) {
+        const take = budget <= 0 ? 0 : Math.min(budget, br.points.length);
+        budget -= take;
+        if (take <= 0) return;                       // this branch is not reached yet
+        // A partial branch keeps its FULL point list for the gradient anchor
+        // (`gradPoints`), so the colours do not crawl as the line grows.
+        if (take < br.points.length) {
+          shown = { label: br.label, points: br.points.slice(0, take), gradPoints: br.points };
+        }
+      }
+      const brp = shown.points;
+      if (!brp.length) return;
       // The pen decides HOW the branch is drawn; the style (dash) decides how
       // the stroke is broken up. Both are per row and compose.
-      if (curvePen === 'pencil') drawPencil(ctx, br, curve, X, Y, H);
-      else if (curvePen === 'calligraphy') drawCalligraphy(ctx, br, curve, X, Y, H);
+      if (curvePen === 'pencil') drawPencil(ctx, shown, curve, X, Y, H);
+      else if (curvePen === 'calligraphy') drawCalligraphy(ctx, shown, curve, X, Y, H);
       else if (curvePen === 'marker') {
         // Felt tip: a soft translucent halo under a slightly stronger core, so
         // crossings darken like real marker ink.
-        strokeBranch(ctx, br, curve, X, Y, H, 1.35, 0.3);
-        strokeBranch(ctx, br, curve, X, Y, H, 1.0, 0.7);
+        strokeBranch(ctx, shown, curve, X, Y, H, 1.35, 0.3);
+        strokeBranch(ctx, shown, curve, X, Y, H, 1.0, 0.7);
       } else if (curvePen === 'highlighter') {
         // Flat, very translucent and a little wider — reads as a highlighter.
-        strokeBranch(ctx, br, curve, X, Y, H, 1.6, 0.32);
+        strokeBranch(ctx, shown, curve, X, Y, H, 1.6, 0.32);
       } else {
-        strokeBranch(ctx, br, curve, X, Y, H, 1, 1);   // technical pen
+        strokeBranch(ctx, shown, curve, X, Y, H, 1, 1);   // technical pen
       }
 
       // Point markers — only when the unit spacing is wide enough that they
       // don't merge into a solid ribbon. They carry the PEN's own ink weight,
       // so a highlighter's samples don't show as opaque dots on a pale band.
       if (unit >= 6) {
-        ctx.fillStyle = paintFor(ctx, br, curve, penMarkerAlpha(curvePen), X, Y);
-        for (const p of br.points) {
+        ctx.fillStyle = paintFor(ctx, shown, curve, penMarkerAlpha(curvePen), X, Y);
+        for (const p of brp) {
           const px = X(p.x), py = Y(p.y);
           if (px < 0 || px > W || py < 0 || py > H) continue;
           ctx.beginPath(); ctx.arc(px, py, 2.5, 0, Math.PI * 2); ctx.fill();
@@ -1726,11 +2172,13 @@ function draw(curves) {
    pen can only affect its own pixels. */
 
 // Paint for a branch: the row's gradient (when it has two colours) or a flat
-// rgba colour, at `alphaMul` × the row's opacity.
+// rgba colour, at `alphaMul` × the row's opacity. While the draw animation is
+// revealing a branch only part-way, the gradient is anchored to the branch's
+// FULL point list (`gradPoints`), so the colours stay put as the line grows.
 function paintFor(ctx, br, curve, alphaMul, X, Y) {
   const a = opToAlpha(curve.opacity) * (alphaMul === undefined ? 1 : alphaMul);
   if (curve.color2 && curve.color2 !== curve.color) {
-    return branchGradient(ctx, br.points, curve.color, curve.color2, a, X, Y);
+    return branchGradient(ctx, br.gradPoints || br.points, curve.color, curve.color2, a, X, Y);
   }
   return colorWithAlpha(curve.color, a);
 }
@@ -1855,12 +2303,14 @@ function drawCalligraphy(ctx, br, curve, X, Y, H) {
 // side ∈ above / below / between / outside. The fill uses the current
 // view transform, so it stays correct through pan/zoom (the region is
 // unbounded in data space; the canvas clips it to the visible window).
-function drawInequalityShade(ctx, curve, X, Y, W, H) {
+function drawInequalityShade(ctx, curve, X, Y, W, H, fade) {
   const ineq = curve.inequality;
   const side = ineq.side;
   // Base translucent tint (25%), scaled by the row's chosen line opacity so
-  // a faded formula's shaded region fades with it.
-  const alpha = 0.25 * opToAlpha(curve.opacity);
+  // a faded formula's shaded region fades with it — and by `fade` (0…1), the
+  // draw animation's progress for this row, so the tint arrives with the
+  // boundary that encloses it.
+  const alpha = 0.25 * opToAlpha(curve.opacity) * (fade === undefined ? 1 : fade);
   const topY = 0, bottomY = H;  // screen-space edges of the canvas
 
   const fillAbove = (br) => {
@@ -3037,6 +3487,7 @@ function clearError() {
 let plotSeq = 0;
 
 function exportPng() {
+  animFinishForExport();          // never download a half-drawn graph
   const cv = document.getElementById('graph');
   const a = document.createElement('a');
   a.href = cv.toDataURL('image/png');
@@ -3044,6 +3495,21 @@ function exportPng() {
   document.body.appendChild(a);
   a.click();
   a.remove();
+}
+
+// A PNG File straight off the canvas, SYNCHRONOUSLY (toDataURL + atob), so a
+// share keeps its transient activation. Used when an export has just completed
+// a half-drawn animation — the debounced pre-encoded PNG is still stale then.
+function canvasPngFileSync() {
+  const cv = document.getElementById('graph');
+  try {
+    const bin = atob(cv.toDataURL('image/png').split(',')[1]);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new File([bytes], 'xy-graph.png', { type: 'image/png' });
+  } catch (e) {
+    return null;
+  }
 }
 
 // Transient confirmation inside an ICON-ONLY button: swap the glyph for a tick
@@ -3146,7 +3612,9 @@ function shareImage() {
   const btn = document.getElementById('shareBtn');
   const title = 'xy-graph-gen';
   const text = 'Plotted with xy-graph-gen: ' + location.href;
-  const file = freshPngFile();
+  // Sharing mid-drawing would send a half-drawn picture: finish the drawing
+  // first, then encode it synchronously (the pre-encoded PNG is still stale).
+  const file = animFinishForExport() ? canvasPngFileSync() : freshPngFile();
 
   // 1. Image + link through the OS share sheet. Called SYNCHRONOUSLY so the
   //    tap's activation is still valid.
@@ -3384,6 +3852,7 @@ async function plot() {
   lastCurves = curves;
   lastPlottedKeys = collectSpecs().map(function (s) { return s.key; });
   view = null;
+  animReset();          // a new plot always starts from the complete graph
   draw(curves);
   renderTable(curves, colors);
   renderLegend(curves);
@@ -3394,6 +3863,7 @@ async function plot() {
     nPts + ' points \u00b7 drag to pan \u00b7 scroll / pinch to zoom \u00b7 double-click to reset';
   pushHistory(formulas[0]);
   renderHistory();
+  if (anim.auto) animPlay(true);      // auto-play: draw it again from scratch
 }
 
 /* ================= history (per-mode localStorage ring buffer) ================= */
@@ -3649,6 +4119,7 @@ function init() {
   document.getElementById('themeBtn').addEventListener('click', toggleTheme);
   document.getElementById('gridBtn').addEventListener('click', toggleGrid);
   document.getElementById('axisBtn').addEventListener('click', toggleAxes);
+  initAnim();
   ['history', 'samples'].forEach(function (kind) {
     const el = document.getElementById(kind + 'Accordion');
     el.addEventListener('toggle', function () {

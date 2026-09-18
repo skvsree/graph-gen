@@ -13,9 +13,9 @@ const sandbox = { console, Math, Number, String, Object, Set, Map, Array, isFini
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 // The guard `typeof document !== 'undefined'` prevents DOM code from running here.
-vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches, evalAst: evalAst, astStr: astStr, applyFunc: applyFunc, applyFunc2: applyFunc2, colorFill: colorFill, colorWithAlpha: colorWithAlpha, spliceAtCaret: spliceAtCaret, FN_HELP: FN_HELP, FN_CONSTS: FN_CONSTS, FUNCTIONS: FUNCTIONS, TWO_ARG_FUNCTIONS: TWO_ARG_FUNCTIONS, styleDash: styleDash, styleCap: styleCap, styleLabel: styleLabel, strokeNum: strokeNum, STYLE_OPTIONS: STYLE_OPTIONS, DEFAULT_STYLE: DEFAULT_STYLE, DEFAULT_STROKE_WIDTH: DEFAULT_STROKE_WIDTH, calligraphyWidth: calligraphyWidth, pencilJitter: pencilJitter, hashUnit: hashUnit, penLabel: penLabel, PEN_OPTIONS: PEN_OPTIONS, DEFAULT_PEN: DEFAULT_PEN };', sandbox);
+vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches, evalAst: evalAst, astStr: astStr, applyFunc: applyFunc, applyFunc2: applyFunc2, colorFill: colorFill, colorWithAlpha: colorWithAlpha, spliceAtCaret: spliceAtCaret, FN_HELP: FN_HELP, FN_CONSTS: FN_CONSTS, FUNCTIONS: FUNCTIONS, TWO_ARG_FUNCTIONS: TWO_ARG_FUNCTIONS, styleDash: styleDash, styleCap: styleCap, styleLabel: styleLabel, strokeNum: strokeNum, STYLE_OPTIONS: STYLE_OPTIONS, DEFAULT_STYLE: DEFAULT_STYLE, DEFAULT_STROKE_WIDTH: DEFAULT_STROKE_WIDTH, calligraphyWidth: calligraphyWidth, pencilJitter: pencilJitter, hashUnit: hashUnit, penLabel: penLabel, PEN_OPTIONS: PEN_OPTIONS, DEFAULT_PEN: DEFAULT_PEN, animRowTotals: animRowTotals, animCounts: animCounts, animRate: animRate, animDurationMs: animDurationMs, animBranchCounts: animBranchCounts, ANIM_BASE_MS: ANIM_BASE_MS, ANIM_SPEEDS: ANIM_SPEEDS, animVideoTimes: animVideoTimes, pickVideoMime: pickVideoMime, VIDEO_MIMES: VIDEO_MIMES, ANIM_VIDEO_FPS: ANIM_VIDEO_FPS };', sandbox);
 
-const { solveEquation, evalPoly, fmt, parseTerm, buildBranches, evalAst, astStr, applyFunc, applyFunc2, colorFill, colorWithAlpha, spliceAtCaret, FN_HELP, FN_CONSTS, FUNCTIONS, TWO_ARG_FUNCTIONS, styleDash, styleCap, styleLabel, strokeNum, STYLE_OPTIONS, DEFAULT_STYLE, DEFAULT_STROKE_WIDTH, calligraphyWidth, pencilJitter, hashUnit, penLabel, PEN_OPTIONS, DEFAULT_PEN } = sandbox.__api;
+const { solveEquation, evalPoly, fmt, parseTerm, buildBranches, evalAst, astStr, applyFunc, applyFunc2, colorFill, colorWithAlpha, spliceAtCaret, FN_HELP, FN_CONSTS, FUNCTIONS, TWO_ARG_FUNCTIONS, styleDash, styleCap, styleLabel, strokeNum, STYLE_OPTIONS, DEFAULT_STYLE, DEFAULT_STROKE_WIDTH, calligraphyWidth, pencilJitter, hashUnit, penLabel, PEN_OPTIONS, DEFAULT_PEN, animRowTotals, animCounts, animRate, animDurationMs, animBranchCounts, ANIM_BASE_MS, ANIM_SPEEDS, animVideoTimes, pickVideoMime, VIDEO_MIMES, ANIM_VIDEO_FPS } = sandbox.__api;
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -398,5 +398,53 @@ function checkErrPolar(name, raw, needle) {
 checkErrPolar('polar non-linear', 'r^2 = 2θ', 'linear in r');
 checkErrPolar('polar no r', 'θ = 2', 'no effective r term');
 checkErrPolar('polar unknown func', 'r = foo(θ)', 'Unknown function');
+
+// ── draw animation + video export (pure helpers) ────────────────────────────
+{
+  // The pace the user asked to slow down: 2.6s -> 4s for the longest row at 1x.
+  check('animation base duration is 4000ms at 1x', ANIM_BASE_MS, 4000);
+  check('speed ladder', ANIM_SPEEDS, [0.5, 1, 2, 4]);
+  check('duration follows the speed menu (1x on garbage)',
+        [animDurationMs(0.5), animDurationMs(1), animDurationMs(2), animDurationMs(4), animDurationMs(0)],
+        [8000, 4000, 2000, 1000, 4000]);
+
+  check('row totals sum the row branches',
+        animRowTotals([{ branches: [{ points: [1, 2, 3] }, { points: [1, 2] }] }, { branches: [] }]),
+        [5, 0]);
+  check('reveal starts at nothing', animCounts([100, 1000], 0, 1000 / 4000), [0, 0]);
+  check('t < 0 means the whole graph', animCounts([100, 1000], -1, 1), [100, 1000]);
+  check('rows share one rate and each clamps at its own total',
+        [animCounts([100, 1000], 1000, 1000 / 4000), animCounts([100, 1000], 999999, 1000 / 4000)],
+        [[100, 250], [100, 1000]]);
+  check('an empty graph has rate 0 (playback still ends on time)', animRate([0, 0], 1), 0);
+  check('the rate makes the longest row take the whole duration', animRate([10, 400], 1), 0.1);
+  check('branches are consumed in order', animBranchCounts([5, 7, 4], 9), [5, 4, 0]);
+  check('a zero reveal splits into nothing', animBranchCounts([5, 7], 0), [0, 0]);
+}
+
+{
+  // Video export plan: 0 -> complete graph, ending on t = -1 (the finished
+  // state the player itself ends on), evenly spaced at the capture rate.
+  const times = animVideoTimes(4000, ANIM_VIDEO_FPS, 400);
+  check('video plan: 25fps over 4s = 101 frames', times.length, 101);
+  check('video plan starts at 0 and ends on the complete graph',
+        [times[0], times[times.length - 1]], [0, -1]);
+  check('video plan is evenly spaced at the capture rate', times[1], 40);
+  check('video plan honours the frame cap', animVideoTimes(60000, 25, 400).length, 400);
+  check('video plan survives junk input', animVideoTimes(0, 0, 0), [0, -1]);
+
+  // Format ladder: Safari only writes MP4/H.264, Chromium/Firefox write WebM.
+  check('mime ladder prefers mp4/h264 (Safari)',
+        pickVideoMime(t => t === 'video/mp4;codecs=avc1.42E01E'),
+        { mime: 'video/mp4;codecs=avc1.42E01E', ext: 'mp4' });
+  check('mime ladder falls back to webm/vp8 (Chromium, Firefox)',
+        pickVideoMime(t => t === 'video/webm;codecs=vp8'),
+        { mime: 'video/webm;codecs=vp8', ext: 'webm' });
+  check('mime ladder reports "cannot record" as null', pickVideoMime(() => false), null);
+  check('mime ladder survives a throwing probe',
+        pickVideoMime(() => { throw new Error('nope'); }), null);
+  check('mime ladder is ordered mp4 -> webm',
+        [VIDEO_MIMES[0][1], VIDEO_MIMES[VIDEO_MIMES.length - 1][1]], ['mp4', 'webm']);
+}
 
 process.exit(failures === 0 ? 0 : 1);

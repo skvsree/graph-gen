@@ -27,6 +27,20 @@ numbers and the `x`/`y` labels), each showing its state as an accented icon, so
 grid on + axis off gives an unlabelled grid and both off gives curves only. Every successful plot is remembered in a localStorage history row (last
 12, click a chip to re-plot, ✕ clear).
 
+The graph can also **draw itself**. A player under the canvas traces every curve
+point by point: the line grows along its samples, the sample dots appearing as
+it reaches them, and each row finishes at its own pace (all rows share one
+points-per-millisecond rate, so a short curve lands before a long one). The bar
+carries ▶ play/pause, a **scrub** slider you can drag to stop the drawing
+anywhere, a **speed** menu (0.5×/1×/2×/4× — the longest curve takes 4 s at 1×),
+an **auto-play** toggle that redraws every new plot, and a **video button** that
+records the drawing and downloads it as `xy-graph-drawing.mp4` (`.webm` where a
+browser cannot encode MP4). Recording happens **entirely in the browser**
+(MediaRecorder over the canvas: nothing is uploaded, no server round-trip, and
+it keeps working offline in the installed app) — so an export takes as long as
+the drawing itself, about 4 s at 1×. Speed and auto-play are remembered per
+device.
+
 **Plot up to 5 formulas at once** ("+ Add formula" adds an input row). Each
 row owns its curve's **colours** — a device picker, a **hex box** taking any
 opaque CSS colour (`#f80`, `#ff8800`, `rgb(… )`, `hsl(…)`, `tomato`; Enter or

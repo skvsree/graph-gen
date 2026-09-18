@@ -452,7 +452,7 @@ def test_template_pen_and_style_menus_stay_one_styled_pair():
     css = r.text.split("</style>")[0]
 
     # ONE shared declaration block for the two menus ...
-    m = re.search(r"\.form select\.pen-pick,\s*\.form select\.style-pick \{([^}]*)\}", css)
+    m = re.search(r"\.form select\.pen-pick,\s*\.form select\.style-pick[^{]*\{([^}]*)\}", css)
     assert m is not None, "pen + style menus must share one css rule"
     block = m.group(1)
     # ... and no rule may style just one of them (that is how they diverged).
@@ -1109,3 +1109,50 @@ def test_actions_also_report_to_a_toast():
     assert 'id="toast"' in text and "function toast" in text
     flash = text.split("function flashButton(btn, label)", 1)[1].split("function toast", 1)[0]
     assert "toast(label)" in flash
+
+
+def test_anim_video_export_is_recorded_in_the_browser():
+    """The drawing downloads as a video with NO server involved.
+
+    The page records its own canvas (MediaRecorder + captureStream) and pushes
+    one frame per reveal step, so the file is produced locally — no upload
+    endpoint, no runtime image dependency, and it keeps working offline in the
+    installed PWA.
+    """
+    text = client.get("/").text
+    assert 'id="animVideo"' in text
+    assert "function exportVideo" in text
+    assert "function pickVideoMime" in text
+    assert "function animVideoTimes" in text
+    assert "captureStream(0)" in text                  # 0 = manual frame push
+    assert "track.requestFrame()" in text              # one video frame per step
+    assert "animVideoTimes(animDurationMs(anim.speed)" in text
+    # The ladder must span both families: Safari records MP4/H.264 only,
+    # Chromium/Firefox record WebM.
+    assert "video/mp4;codecs=avc1.42E01E" in text
+    assert "video/webm;codecs=vp9" in text
+    assert "video/webm;codecs=vp8" in text
+    assert "xy-graph-drawing." in text                 # download filename
+    # Frames are timestamped by the wall clock, so they must be spaced — pushed
+    # in a tight loop the video would play back instantly.
+    assert "setTimeout(r, 1000 / ANIM_VIDEO_FPS)" in text
+    # ...and nothing may reach for a server-side encoder.
+    assert "/api/webp" not in text
+
+
+def test_anim_video_button_is_a_styled_toolbar_button():
+    """An icon-only button only looks right via `.form .tool-btn` (the pen menu
+    once shipped into the DOM with no CSS at all), so assert the classes."""
+    text = client.get("/").text
+    m = re.search(r'<button[^>]*id="animVideo"[^>]*>', text)
+    assert m is not None, "the video button must exist in the player bar"
+    tag = m.group(0)
+    assert "tool-btn" in tag and "btn-secondary" in tag
+    assert ".form .tool-btn" in text.split("</style>")[0]
+
+
+def test_no_server_side_video_or_image_encoder_route():
+    """Client-side recording replaced the server-side WebP encoder: no upload
+    route is served, and Pillow is no longer a runtime dependency."""
+    r = client.post("/api/webp", files={"frames": ("f.png", b"not-an-image", "image/png")})
+    assert r.status_code == 404

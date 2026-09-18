@@ -19,7 +19,7 @@
  * controllerchange handler in templates/index.html.
  */
 
-const VERSION = 'v8';
+const VERSION = 'v9';
 const SHELL_CACHE = 'xygg-shell-' + VERSION;
 const API_CACHE = 'xygg-api-' + VERSION;
 const FONT_CACHE = 'xygg-fonts-' + VERSION;

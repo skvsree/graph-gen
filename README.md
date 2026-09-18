@@ -33,7 +33,10 @@ it reaches them, and each row finishes at its own pace (all rows share one
 points-per-millisecond rate, so a short curve lands before a long one). The bar
 carries ▶ play/pause, a **scrub** slider you can drag to stop the drawing
 anywhere, a **speed** menu (0.5×/1×/2×/4× — the longest curve takes 4 s at 1×),
-an **auto-play** toggle that redraws every new plot, and a **video button** that
+an **auto-play** toggle that redraws every new plot, a **row by row** toggle
+(each curve is traced to the end before the next one starts, at the *same* rate —
+so only the order changes and the drawing takes as long as its rows add up to;
+two equal curves take 8 s at 1× instead of 4 s), and a **video button** that
 records the drawing and downloads it as `xy-graph-drawing.mp4` (`.webm` where a
 browser cannot encode MP4). Recording happens **entirely in the browser** —
 nothing is uploaded, no server round-trip, and it keeps working offline in the

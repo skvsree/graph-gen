@@ -13,9 +13,9 @@ const sandbox = { console, Math, Number, String, Object, Set, Map, Array, isFini
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 // The guard `typeof document !== 'undefined'` prevents DOM code from running here.
-vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches, evalAst: evalAst, astStr: astStr, applyFunc: applyFunc, applyFunc2: applyFunc2, colorFill: colorFill, colorWithAlpha: colorWithAlpha, spliceAtCaret: spliceAtCaret, FN_HELP: FN_HELP, FN_CONSTS: FN_CONSTS, FUNCTIONS: FUNCTIONS, TWO_ARG_FUNCTIONS: TWO_ARG_FUNCTIONS, styleDash: styleDash, styleCap: styleCap, styleLabel: styleLabel, strokeNum: strokeNum, STYLE_OPTIONS: STYLE_OPTIONS, DEFAULT_STYLE: DEFAULT_STYLE, DEFAULT_STROKE_WIDTH: DEFAULT_STROKE_WIDTH, calligraphyWidth: calligraphyWidth, pencilJitter: pencilJitter, hashUnit: hashUnit, penLabel: penLabel, PEN_OPTIONS: PEN_OPTIONS, DEFAULT_PEN: DEFAULT_PEN, animRowTotals: animRowTotals, animCounts: animCounts, animRate: animRate, animDurationMs: animDurationMs, animBranchCounts: animBranchCounts, ANIM_BASE_MS: ANIM_BASE_MS, ANIM_SPEEDS: ANIM_SPEEDS, animVideoTimes: animVideoTimes, pickVideoMime: pickVideoMime, VIDEO_MIMES: VIDEO_MIMES, ANIM_VIDEO_FPS: ANIM_VIDEO_FPS, videoPushable: videoPushable, videoStrategy: videoStrategy, MP4_VIDEO_CODECS: MP4_VIDEO_CODECS, VIDEO_BITRATE: VIDEO_BITRATE, videoFallbackReason: videoFallbackReason };', sandbox);
+vm.runInContext(m[1] + '\nthis.__api = { solveEquation: solveEquation, evalPoly: evalPoly, fmt: fmt, parseTerm: parseTerm, buildBranches: buildBranches, evalAst: evalAst, astStr: astStr, applyFunc: applyFunc, applyFunc2: applyFunc2, colorFill: colorFill, colorWithAlpha: colorWithAlpha, spliceAtCaret: spliceAtCaret, FN_HELP: FN_HELP, FN_CONSTS: FN_CONSTS, FUNCTIONS: FUNCTIONS, TWO_ARG_FUNCTIONS: TWO_ARG_FUNCTIONS, styleDash: styleDash, styleCap: styleCap, styleLabel: styleLabel, strokeNum: strokeNum, STYLE_OPTIONS: STYLE_OPTIONS, DEFAULT_STYLE: DEFAULT_STYLE, DEFAULT_STROKE_WIDTH: DEFAULT_STROKE_WIDTH, calligraphyWidth: calligraphyWidth, pencilJitter: pencilJitter, hashUnit: hashUnit, penLabel: penLabel, PEN_OPTIONS: PEN_OPTIONS, DEFAULT_PEN: DEFAULT_PEN, animRowTotals: animRowTotals, animCounts: animCounts, animRate: animRate, animDurationMs: animDurationMs, animBranchCounts: animBranchCounts, ANIM_BASE_MS: ANIM_BASE_MS, ANIM_SPEEDS: ANIM_SPEEDS, animVideoTimes: animVideoTimes, pickVideoMime: pickVideoMime, VIDEO_MIMES: VIDEO_MIMES, ANIM_VIDEO_FPS: ANIM_VIDEO_FPS, videoPushable: videoPushable, videoStrategy: videoStrategy, MP4_VIDEO_CODECS: MP4_VIDEO_CODECS, VIDEO_BITRATE: VIDEO_BITRATE, videoFallbackReason: videoFallbackReason, animRowCounts: animRowCounts, animTotalMs: animTotalMs };', sandbox);
 
-const { solveEquation, evalPoly, fmt, parseTerm, buildBranches, evalAst, astStr, applyFunc, applyFunc2, colorFill, colorWithAlpha, spliceAtCaret, FN_HELP, FN_CONSTS, FUNCTIONS, TWO_ARG_FUNCTIONS, styleDash, styleCap, styleLabel, strokeNum, STYLE_OPTIONS, DEFAULT_STYLE, DEFAULT_STROKE_WIDTH, calligraphyWidth, pencilJitter, hashUnit, penLabel, PEN_OPTIONS, DEFAULT_PEN, animRowTotals, animCounts, animRate, animDurationMs, animBranchCounts, ANIM_BASE_MS, ANIM_SPEEDS, animVideoTimes, pickVideoMime, VIDEO_MIMES, ANIM_VIDEO_FPS, videoPushable, videoStrategy, MP4_VIDEO_CODECS, VIDEO_BITRATE, videoFallbackReason } = sandbox.__api;
+const { solveEquation, evalPoly, fmt, parseTerm, buildBranches, evalAst, astStr, applyFunc, applyFunc2, colorFill, colorWithAlpha, spliceAtCaret, FN_HELP, FN_CONSTS, FUNCTIONS, TWO_ARG_FUNCTIONS, styleDash, styleCap, styleLabel, strokeNum, STYLE_OPTIONS, DEFAULT_STYLE, DEFAULT_STROKE_WIDTH, calligraphyWidth, pencilJitter, hashUnit, penLabel, PEN_OPTIONS, DEFAULT_PEN, animRowTotals, animCounts, animRate, animDurationMs, animBranchCounts, ANIM_BASE_MS, ANIM_SPEEDS, animVideoTimes, pickVideoMime, VIDEO_MIMES, ANIM_VIDEO_FPS, videoPushable, videoStrategy, MP4_VIDEO_CODECS, VIDEO_BITRATE, videoFallbackReason, animRowCounts, animTotalMs } = sandbox.__api;
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -420,6 +420,41 @@ checkErrPolar('polar unknown func', 'r = foo(θ)', 'Unknown function');
   check('the rate makes the longest row take the whole duration', animRate([10, 400], 1), 0.1);
   check('branches are consumed in order', animBranchCounts([5, 7, 4], 9), [5, 4, 0]);
   check('a zero reveal splits into nothing', animBranchCounts([5, 7], 0), [0, 0]);
+
+  // Row-by-row: the SAME rate, so a curve traces at the same speed — only the
+  // order changes, because each row must finish before the next one starts.
+  // At 0.1 points/ms, 200ms is a budget of 20 points.
+  check('row-by-row: the first row is traced before the second starts',
+        animRowCounts([10, 30], 200, 0.1), [10, 10]);
+  check('row-by-row: later rows are untouched while an earlier one draws',
+        animRowCounts([10, 30], 50, 0.1), [5, 0]);
+  check('row-by-row: the third row waits for the first two',
+        animRowCounts([10, 20, 30], 320, 0.1), [10, 20, 2]);
+  check('row-by-row: the budget never overflows a row',
+        animRowCounts([10, 30], 1e6, 0.1), [10, 30]);
+  check('row-by-row: nothing drawn at t = 0', animRowCounts([10, 30], 0, 0.1), [0, 0]);
+  check('row-by-row: t < 0 is the finished drawing',
+        animRowCounts([10, 30], -1, 0.1), [10, 30]);
+  // The same totals, one budget: parallel spreads it, row-by-row serialises it.
+  check('parallel counts spread one budget across the rows',
+        animCounts([10, 30], 200, 0.1), [10, 20]);
+  check('row-by-row counts spend it on the first row first',
+        animRowCounts([10, 30], 200, 0.1), [10, 10]);
+
+  // Span: parallel ends with the longest row, row-by-row with the LAST one.
+  check('span: parallel is one base duration', animTotalMs([10, 30], 1, false), 4000);
+  check('span: parallel does not grow with more rows',
+        animTotalMs([30, 30, 30], 1, false), 4000);
+  check('span: row-by-row is every row summed at the same rate',
+        animTotalMs([10, 30], 1, true), 4000 * (40 / 30));
+  check('span: row-by-row with three equal rows takes three times as long',
+        animTotalMs([30, 30, 30], 1, true), 12000);
+  check('span: row-by-row still follows the speed menu',
+        animTotalMs([30, 30], 2, true), 4000);
+  check('span: an empty graph keeps the base duration', animTotalMs([], 1, true), 4000);
+  check('span: a point-less graph keeps the base duration',
+        animTotalMs([0, 0], 1, true), 4000);
+  check('span: junk totals keep the base duration', animTotalMs(null, 1, true), 4000);
 }
 
 {

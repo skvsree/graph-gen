@@ -217,11 +217,11 @@
      two small labels are the only new controls. */
   .anim-bar { margin: 10px 0 2px; }
   .anim-scrub { flex: 1 1 180px; min-width: 120px; height: 24px; accent-color: #2563eb; }
-  .anim-lbl, .anim-auto {
+  .anim-lbl, .anim-auto, .anim-row {
     font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px;
   }
-  .anim-auto { cursor: pointer; }
-  .anim-auto input { margin: 0; accent-color: #2563eb; }
+  .anim-auto, .anim-row { cursor: pointer; }
+  .anim-auto input, .anim-row input { margin: 0; accent-color: #2563eb; }
   .anim-pct {
     font-size: 12px; color: var(--muted); min-width: 40px; text-align: right;
     font-variant-numeric: tabular-nums;
@@ -508,8 +508,11 @@
     <label class="anim-auto" for="animAuto" title="Play the drawing automatically every time the graph is plotted (remembered on this device)">
       <input type="checkbox" id="animAuto"> auto-play
     </label>
+    <label class="anim-row" for="animRow" title="Draw one row at a time: each curve is traced completely before the next one starts. The drawing runs longer, because every row gets its own turn at the same rate (remembered on this device)">
+      <input type="checkbox" id="animRow"> row by row
+    </label>
     <button type="button" class="btn-secondary tool-btn" id="animVideo"
-            title="Download the drawing as a video — records the graph drawing itself in your browser (plays the drawing once while recording, ~4s at 1x)"
+            title="Download the drawing as a video — records the graph drawing itself in your browser (it plays the drawing once; the length follows your speed and row-by-row settings)"
             aria-label="Download video">
       <svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><rect class="s" x="2.6" y="3.8" width="12.8" height="10.4" rx="2.2"/><path class="f" d="M7.5 6.9 11.8 9l-4.3 2.1Z"/></svg>
     </button>
@@ -1658,7 +1661,7 @@ function redraw() { if (lastCurves) draw(lastCurves); }
 
 const ANIM_SPEEDS = [0.5, 1, 2, 4];   // the speed menu, in order (mirrors the <option>s)
 const ANIM_BASE_MS = 4000;            // 1x: the longest row takes this long (was 2600 — "a little slower")
-const anim = { playing: false, t: -1, speed: 1, auto: false, raf: 0, last: 0 };
+const anim = { playing: false, t: -1, speed: 1, auto: false, row: false, raf: 0, last: 0 };
 
 const ANIM_ICON = {
   play: '<svg class="ico" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="f" d="M6 3.4 14.4 9 6 14.6Z"/></svg>',
@@ -1687,6 +1690,7 @@ function animCounts(totals, t, rate) {
 // Points per millisecond: the row with the most points takes exactly
 // ANIM_BASE_MS / speed. A graph with no points yields 0 — the playback still
 // ends, because the tick stops on elapsed TIME, not on progress.
+// BOTH modes share this rate, so a curve traces at the same speed either way.
 function animRate(totals, speed) {
   const longest = totals.reduce(function (m, n) { return n > m ? n : m; }, 0);
   return longest > 0 ? longest / animDurationMs(speed) : 0;
@@ -1695,6 +1699,37 @@ function animRate(totals, speed) {
 function animDurationMs(speed) {
   const s = Number(speed);
   return ANIM_BASE_MS / (isFinite(s) && s > 0 ? s : 1);
+}
+
+// Row-by-row reveal: each row must FINISH before the next one starts. Same rate
+// as the parallel mode, so this only changes the ORDER — the drawing takes as
+// long as the rows add up to (three equal rows ⇒ three times as long). Pure, so
+// the node suite covers it.
+function animRowCounts(totals, t, rate) {
+  if (t < 0) return totals.slice();
+  let budget = t * rate;
+  return totals.map(function (n) {
+    const take = budget <= 0 ? 0 : (budget > n ? n : budget);
+    budget -= take;
+    return take;
+  });
+}
+
+// How long the WHOLE drawing takes. Parallel mode ends with the longest row
+// (ANIM_BASE_MS / speed); row-by-row ends with the LAST row, i.e. every row's
+// points summed at the same rate. Pure.
+function animTotalMs(totals, speed, rowByRow) {
+  const base = animDurationMs(speed);
+  if (!rowByRow || !totals || !totals.length) return base;
+  const sum = totals.reduce(function (a, b) { return a + b; }, 0);
+  const longest = totals.reduce(function (m, n) { return n > m ? n : m; }, 0);
+  return longest > 0 ? base * (sum / longest) : base;
+}
+
+// The span for the graph currently on screen — the player needs the plotted
+// rows, which the pure helper deliberately does not read for itself.
+function animSpanMs() {
+  return animTotalMs(lastCurves ? animRowTotals(lastCurves) : [], anim.speed, anim.row);
 }
 
 // Split one row's revealed count across its branches IN ORDER: branch 1 is
@@ -1712,14 +1747,19 @@ function animBranchCounts(branchCounts, revealed) {
 function animReveal(curves) {
   if (anim.t < 0 || !curves || !curves.length) return null;
   const totals = animRowTotals(curves);
-  return { counts: animCounts(totals, anim.t, animRate(totals, anim.speed)), totals: totals };
+  const rate = animRate(totals, anim.speed);
+  return {
+    counts: anim.row ? animRowCounts(totals, anim.t, rate)
+                     : animCounts(totals, anim.t, rate),
+    totals: totals,
+  };
 }
 
 // --- animation controls ----------------------------------------------------
 
 function animProgress() {                     // 0…1, drives the scrub bar
   if (anim.t < 0) return 1;
-  const d = animDurationMs(anim.speed);
+  const d = animSpanMs();
   return d > 0 ? Math.min(1, anim.t / d) : 1;
 }
 
@@ -1757,7 +1797,7 @@ function animTick(ts) {
   // otherwise teleport the drawing to its end.
   anim.t += Math.min(ts - anim.last, 120);
   anim.last = ts;
-  if (anim.t >= animDurationMs(anim.speed)) {
+  if (anim.t >= animSpanMs()) {
     animStop();
     anim.t = -1;                    // finished → the complete graph
     animRedraw();
@@ -1771,7 +1811,7 @@ function animTick(ts) {
 
 function animPlay(fromStart) {
   if (!lastCurves) return;
-  if (fromStart || anim.t >= animDurationMs(anim.speed)) anim.t = 0;
+  if (fromStart || anim.t >= animSpanMs()) anim.t = 0;
   animStop();
   anim.playing = true;
   anim.last = 0;
@@ -1790,7 +1830,7 @@ function animToggle() {
 function animScrubTo(f) {
   animStop();
   const clamped = f < 0 ? 0 : (f > 1 ? 1 : f);
-  anim.t = clamped >= 1 ? -1 : clamped * animDurationMs(anim.speed);
+  anim.t = clamped >= 1 ? -1 : clamped * animSpanMs();
   animRedraw();
   animSync();
 }
@@ -2071,7 +2111,7 @@ async function exportVideo() {
   if (btn) btn.disabled = true;
   toast(strategy === 'webcodecs' ? 'Rendering the video…' : 'Recording the drawing…');
   try {
-    const times = animVideoTimes(animDurationMs(anim.speed), ANIM_VIDEO_FPS, ANIM_VIDEO_MAX_FRAMES);
+    const times = animVideoTimes(animSpanMs(), ANIM_VIDEO_FPS, ANIM_VIDEO_MAX_FRAMES);
     await new Promise(function (res) { setTimeout(res, 0); });   // let the toast paint
     let blob, ext;
     if (strategy === 'webcodecs') {
@@ -2151,6 +2191,7 @@ function animSavePrefs() {
   try {
     localStorage.setItem('xygh:anim:speed', String(anim.speed));
     localStorage.setItem('xygh:anim:auto', anim.auto ? '1' : '0');
+    localStorage.setItem('xygh:anim:row', anim.row ? '1' : '0');
   } catch (e) {}
 }
 
@@ -2159,6 +2200,7 @@ function animLoadPrefs() {
     const s = parseFloat(localStorage.getItem('xygh:anim:speed') || '');
     if (ANIM_SPEEDS.indexOf(s) !== -1) anim.speed = s;
     anim.auto = localStorage.getItem('xygh:anim:auto') === '1';
+    anim.row = localStorage.getItem('xygh:anim:row') === '1';
   } catch (e) {}
 }
 
@@ -2171,6 +2213,8 @@ function initAnim() {
   const auto = document.getElementById('animAuto');
   if (speed) speed.value = String(anim.speed);
   if (auto) auto.checked = anim.auto;
+  const rowFlagInit = document.getElementById('animRow');
+  if (rowFlagInit) rowFlagInit.checked = anim.row;
   btn.addEventListener('click', animToggle);
   if (speed) {
     speed.addEventListener('change', function () {
@@ -2178,7 +2222,7 @@ function initAnim() {
       if (ANIM_SPEEDS.indexOf(next) === -1) return;
       const f = animProgress();           // keep the drawing where it is
       anim.speed = next;
-      if (anim.t >= 0 && f < 1) anim.t = f * animDurationMs(anim.speed);
+      if (anim.t >= 0 && f < 1) anim.t = f * animSpanMs();
       animSavePrefs();
       animRedraw();
       animSync();
@@ -2194,6 +2238,20 @@ function initAnim() {
       anim.auto = auto.checked;
       animSavePrefs();
       if (anim.auto) animPlay(true);      // immediate feedback for the toggle
+    });
+  }
+  // Row by row: the same drawing, one curve at a time. Changing it mid-drawing
+  // keeps the drawing where it is (the fraction is preserved), so the toggle
+  // never teleports the reveal.
+  const rowFlag = document.getElementById('animRow');
+  if (rowFlag) {
+    rowFlag.addEventListener('change', function () {
+      const f = animProgress();
+      anim.row = rowFlag.checked;
+      if (anim.t >= 0 && f < 1) anim.t = f * animSpanMs();
+      animSavePrefs();
+      animRedraw();
+      animSync();
     });
   }
   // The video download: recording happens in the browser (see exportVideo).

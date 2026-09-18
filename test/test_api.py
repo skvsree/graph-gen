@@ -1111,6 +1111,40 @@ def test_actions_also_report_to_a_toast():
     assert "toast(label)" in flash
 
 
+def test_animation_can_run_row_by_row():
+    """A flag that serialises the reveal: each curve finishes before the next
+    starts, at the SAME rate, so only the order changes (the drawing takes as
+    long as its rows add up to, instead of ending with the longest).
+
+    Every timing path must agree with it — the tick's stop condition, the scrub,
+    the speed change and the video export all have to use the mode-aware span,
+    or the bar disagrees with what is on the canvas.
+    """
+    text = client.get("/").text
+    assert 'id="animRow"' in text
+    assert "row by row" in text
+    m = re.search(r"<label[^>]*for=\"animRow\"[^>]*>", text)
+    assert m is not None, "the flag needs a label to be clickable"
+    assert 'class="anim-row"' in m.group(0)          # styled with the bar's controls
+    assert 'title="Draw one row at a time' in m.group(0)
+    assert "function animRowCounts" in text
+    assert "function animTotalMs" in text
+    assert "function animSpanMs" in text
+    assert "anim.row ? animRowCounts(totals, anim.t, rate)" in text
+    assert "animTotalMs(lastCurves ? animRowTotals(lastCurves) : [], anim.speed, anim.row)" in text
+    # No timing site may use the parallel-only duration: the stop condition, the
+    # scrub and the export would otherwise disagree with the drawing.
+    assert "animDurationMs(anim.speed)" not in text
+    assert text.count("animSpanMs()") >= 8           # the definition + 7 callers
+    # Remembered per device, like speed and auto-play.
+    assert "localStorage.setItem('xygh:anim:row'" in text
+    assert "localStorage.getItem('xygh:anim:row')" in text
+    assert "rowFlagInit.checked = anim.row" in text
+    # A new bar control must not ship as a raw UA checkbox.
+    assert ".anim-lbl, .anim-auto, .anim-row {" in text
+    assert ".anim-auto input, .anim-row input" in text
+
+
 def test_anim_video_export_is_recorded_in_the_browser():
     """The drawing downloads as a video with NO server involved.
 
@@ -1126,7 +1160,7 @@ def test_anim_video_export_is_recorded_in_the_browser():
     assert "function animVideoTimes" in text
     assert "captureStream(0)" in text                  # 0 = manual frame push
     assert "track.requestFrame()" in text              # one video frame per step
-    assert "animVideoTimes(animDurationMs(anim.speed)" in text
+    assert "animVideoTimes(animSpanMs(), ANIM_VIDEO_FPS, ANIM_VIDEO_MAX_FRAMES)" in text
     # The ladder must span both families: Safari records MP4/H.264 only,
     # Chromium/Firefox record WebM.
     assert "video/mp4;codecs=avc1.42E01E" in text
@@ -1257,7 +1291,7 @@ def test_service_worker_caches_the_vendored_muxer():
     """The MP4 export must keep working offline in the installed PWA."""
     sw = client.get("/sw.js").text
     assert "startsWith('/vendor/')" in sw
-    assert "const VERSION = 'v13';" in sw
+    assert "const VERSION = 'v14';" in sw
 
 
 def test_anim_video_button_is_a_styled_toolbar_button():

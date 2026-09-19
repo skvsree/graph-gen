@@ -1,0 +1,1038 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>xy-graph-gen — 3D surface grapher</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23f8fafc'/%3E%3Cpath d='M1 12h14M3 14l4-12M13 14l-4-12' stroke='%232563eb' stroke-width='1.4' fill='none'/%3E%3C/svg%3E">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+<!-- PWA: same manifest + worker as the 2D page, so /3d is installable and
+     three.js is served from the shell cache after one online visit. -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="description" content="Plot a 3D surface z = f(x, y) — rotate, zoom and pan it, colour it by height, and save the picture. Installable and works offline.">
+<meta name="theme-color" content="#f8fafc">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="graph-gen">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Neucha&display=swap" rel="stylesheet">
+<style>
+  /* Same tokens as templates/index.html, so the two pages are one product:
+     a theme chosen on one page is the theme on the other (xygh:theme). */
+  :root {
+    --bg: #f8fafc; --fg: #0f172a; --fg-soft: #334155; --muted: #64748b;
+    --card: #ffffff; --border: #cbd5e1; --row-border: #f1f5f9;
+    --hover: #f1f5f9; --input-focus: #bfdbfe;
+    --error-fg: #b91c1c; --error-bg: #fef2f2; --error-border: #fecaca;
+    --accent: #2563eb; --axis-x: #dc2626; --axis-y: #16a34a; --axis-z: #2563eb;
+  }
+  html[data-theme="dark"] {
+    --bg: #0f172a; --fg: #e2e8f0; --fg-soft: #cbd5e1; --muted: #94a3b8;
+    --card: #1e293b; --border: #334155; --row-border: #1e293b;
+    --hover: #243349; --input-focus: #1e3a5f;
+    --error-fg: #fca5a5; --error-bg: #450a0a; --error-border: #7f1d1d;
+    --accent: #93c5fd; --axis-x: #f87171; --axis-y: #4ade80; --axis-z: #93c5fd;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Neucha", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+    background: var(--bg); color: var(--fg);
+    transition: background 0.2s ease, color 0.2s ease;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
+  header h1 { font-size: 22px; margin: 0 0 4px; }
+  header p { color: var(--muted); margin: 0 0 16px; font-size: 14px; }
+  header code { font-size: 13px; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .tab {
+    padding: 7px 18px; font-size: 14px; font-family: inherit; font-weight: 600;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--card);
+    color: var(--muted); cursor: pointer; text-decoration: none;
+  }
+  .tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  html[data-theme="dark"] .tab.active { color: #0f172a; }
+  .form { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  .form input[type=text] {
+    flex: 1; min-width: 240px; font-size: 16px; padding: 10px 14px;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--fg);
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  .form input[type=text]:focus { outline: 2px solid var(--input-focus); border-color: #2563eb; }
+  .form input[type=number] {
+    width: 88px; padding: 8px 10px; font-size: 14px;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--fg);
+    font-family: ui-monospace, Consolas, monospace;
+  }
+  .form input[type=number]:focus { outline: 2px solid var(--input-focus); border-color: #2563eb; }
+  .range-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; width: 100%; }
+  .range-label { color: var(--muted); font-size: 13px; }
+  .plot-btn {
+    padding: 10px 22px; font-size: 15px; font-weight: 600; font-family: inherit;
+    background: #2563eb; color: #fff; border: none; border-radius: 8px; cursor: pointer;
+  }
+  .plot-btn:hover { background: #1d4ed8; }
+  /* Ramp: the colour at the lowest z -> the colour at the highest z. A device
+     colour dialog is not enough on its own (Android's is a small fixed
+     palette), so each end also gets a hex/text box — the swatch stays the
+     single source of truth and the box is an editor that writes into it. */
+  .ramp { display: inline-flex; align-items: center; gap: 4px; flex: none; flex-wrap: wrap; }
+  .ramp input[type=color] {
+    width: 36px; height: 34px; padding: 1px; flex: none; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 6px; background: var(--card);
+  }
+  .ramp input[type=color]::-webkit-color-swatch-wrapper { padding: 2px; }
+  .ramp input[type=color]::-webkit-color-swatch { border: none; border-radius: 4px; }
+  .ramp input[type=color]::-moz-color-swatch { border: none; border-radius: 4px; }
+  .form input.hex-ramp {
+    width: 84px; min-width: 0; flex: none; padding: 8px 6px; font-size: 13px;
+    text-align: center; text-transform: lowercase;
+  }
+  .ramp-arrow { color: var(--muted); font-size: 13px; line-height: 1; padding: 0 1px; }
+  .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .samples { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
+  .chip {
+    padding: 5px 11px; font-size: 13px; font-family: ui-monospace, Consolas, monospace;
+    border: 1px solid var(--border); border-radius: 999px; background: var(--card);
+    color: var(--fg-soft); cursor: pointer;
+  }
+  .chip:hover { background: var(--hover); }
+  .graphbox {
+    position: relative; width: 100%; height: min(62vh, 560px); min-height: 320px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    overflow: hidden;
+  }
+  .graphbox canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+  .graphbox canvas.dragging { cursor: grabbing; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0 0; }
+  .bar .spacer { flex: 1; }
+  .tool-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 14px; font-size: 13.5px; font-weight: 600; font-family: inherit;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--card);
+    color: var(--fg-soft); cursor: pointer;
+  }
+  .tool-btn:hover { background: var(--hover); }
+  .tool-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  html[data-theme="dark"] .tool-btn.on { color: #0f172a; }
+  .hint { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; }
+  .error {
+    margin: 12px 0 0; padding: 10px 14px; font-size: 14px;
+    color: var(--error-fg); background: var(--error-bg);
+    border: 1px solid var(--error-border); border-radius: 8px;
+    white-space: pre-line;
+  }
+  .toast {
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+    background: var(--fg); color: var(--bg); padding: 9px 16px; border-radius: 999px;
+    font-size: 13.5px; opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
+    max-width: 90vw; text-align: center; z-index: 9;
+  }
+  .toast.show { opacity: 0.95; }
+  footer { margin-top: 22px; color: var(--muted); font-size: 12.5px; }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>xy-graph-gen <span class="lbl">3D</span></h1>
+    <p>Enter a surface as <code>z = f(x, y)</code> — it is sampled over an (x, y) window and drawn with WebGL. Drag to rotate, scroll or pinch to zoom, right-drag (or two fingers) to pan, double-click to reset. Functions: <code>sin cos tan asin acos atan atan2(y,x) sinh cosh tanh log ln log10 log2 sqrt cbrt exp abs floor ceil round sign</code> (+ <code>e</code>, <code>pi</code>). Colour fades from the low-z colour to the high-z colour. <a href="/">← 2D grapher</a></p>
+  </header>
+
+  <nav class="tabs">
+    <a class="tab" href="/">2D</a>
+    <span class="tab active" aria-current="page">3D</span>
+  </nav>
+
+  <form class="form" id="form">
+    <input type="text" class="formula-input" id="formula" value="{{ formulas[0] }}" spellcheck="false" autocomplete="off" placeholder="e.g. z = sin(x) * cos(y)" aria-label="Surface formula">
+    <span class="ramp" title="Height ramp — the colour at the lowest z, then the colour at the highest z">
+      <input type="color" class="ramp-low" id="rampLow" value="{{ ramp[0] }}" title="Colour at the lowest z (device picker; the box beside it takes any #rgb/#rrggbb)">
+      <input type="text" class="hex-ramp" id="hexLow" value="{{ ramp[0] }}" spellcheck="false" autocomplete="off" maxlength="7" title="Colour at the lowest z — #rgb or #rrggbb, press Enter to apply" aria-label="Low-z colour as hex">
+      <span class="ramp-arrow" aria-hidden="true">&#8594;</span>
+      <input type="color" class="ramp-high" id="rampHigh" value="{{ ramp[1] }}" title="Colour at the highest z (device picker; the box beside it takes any #rgb/#rrggbb)">
+      <input type="text" class="hex-ramp" id="hexHigh" value="{{ ramp[1] }}" spellcheck="false" autocomplete="off" maxlength="7" title="Colour at the highest z — #rgb or #rrggbb, press Enter to apply" aria-label="High-z colour as hex">
+    </span>
+    <div class="range-row">
+      <span class="range-label">x:</span>
+      <input type="number" id="xMin" value="{{ x_min }}" placeholder="-5" step="any" aria-label="x minimum">
+      <input type="number" id="xMax" value="{{ x_max }}" placeholder="5" step="any" aria-label="x maximum">
+      <span class="range-label">y:</span>
+      <input type="number" id="yMin" value="{{ y_min }}" placeholder="-5" step="any" aria-label="y minimum">
+      <input type="number" id="yMax" value="{{ y_max }}" placeholder="5" step="any" aria-label="y maximum">
+      <span class="range-label" title="Samples per axis — more is smoother and heavier ({{ grid_min }}–{{ grid_max }})">grid:</span>
+      <input type="number" id="gridN" value="{{ grid }}" placeholder="{{ default_grid }}" min="{{ grid_min }}" max="{{ grid_max }}" step="4" aria-label="Grid cells per axis">
+      <button type="submit" class="plot-btn" id="plotBtn">Plot</button>
+    </div>
+  </form>
+
+  <div class="samples" id="samples">
+    <button type="button" class="chip">z = x^2 - y^2</button>
+    <button type="button" class="chip">z = x^2 + y^2</button>
+    <button type="button" class="chip">z = sin(x) * cos(y)</button>
+    <button type="button" class="chip">z = sin(x^2 + y^2) * 2</button>
+    <button type="button" class="chip">z = sqrt(x * y)</button>
+    <button type="button" class="chip">z = 1 / (x^2 + y^2)</button>
+  </div>
+
+  <div class="graphbox" id="graphbox">
+    <canvas id="view"></canvas>
+  </div>
+
+  <div class="bar">
+    <button type="button" class="tool-btn" id="wireBtn" aria-pressed="false" title="Draw the mesh lines as well as the shaded surface">Wire</button>
+    <button type="button" class="tool-btn" id="gridBtn" aria-pressed="true" title="Show the grid on the z = 0 plane">Grid</button>
+    <button type="button" class="tool-btn" id="axisBtn" aria-pressed="true" title="Show the x, y and z axes with their tick numbers">Axes</button>
+    <span class="spacer"></span>
+    <button type="button" class="tool-btn" id="resetBtn" title="Put the camera back to the default 3/4 view">Reset view</button>
+    <button type="button" class="tool-btn" id="pngBtn" title="Save the current view as a PNG">Save PNG</button>
+    <button type="button" class="tool-btn" id="linkBtn" title="Copy a link to this exact surface">Copy link</button>
+    <button type="button" class="tool-btn" id="themeBtn" title="Switch to the dark theme" aria-label="Switch to the dark theme">&#9789;</button>
+  </div>
+
+  <p class="hint" id="status" aria-live="polite">Loading three.js…</p>
+  <div class="error" id="error" hidden></div>
+
+  <footer>
+    <span>xy-graph-gen 3D · v{{ app_version }} · rendered in your browser with three.js — no image is generated on the server.</span>
+  </footer>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<!-- three.js is vendored (static/vendor, MIT) and loaded as an ES module; the
+     page needs no build step and no CDN. Loading is separate from the app
+     script below so a blocked/failed import is a readable message instead of a
+     blank card, and so the app script can run headless (node vm) in tests. -->
+<script type="module">
+  try {
+    const THREE = await import('/vendor/three.module.min.js');
+    window.THREE = THREE;
+  } catch (err) {
+    window.THREE_ERROR = String((err && err.message) || err);
+  }
+  window.dispatchEvent(new Event('three-ready'));
+</script>
+
+<script>
+/* ===========================================================================
+ * xy-graph-gen — 3D surface page.
+ *
+ * The surface is SAMPLED AND SOLVED ON THE SERVER (`GET /api/surface`, the
+ * same eval_ast2 the implicit curves use) and RENDERED IN THE BROWSER with
+ * three.js. Nothing about the picture is produced server-side — the payload is
+ * numbers.
+ *
+ * This first release draws one surface from z = f(x, y). The API is
+ * list-shaped (`surfaces[]`) so extra rows are a page-only change.
+ *
+ * Coordinate mapping: maths (x, y, z) -> three.js (x, z, -y), i.e. the maths
+ * z axis is three's +Y and the maths y axis runs along three's -Z. That
+ * permutation is a proper ROTATION (det +1), not a mirror, so the surface is
+ * not silently reflected.
+ * ======================================================================== */
+
+// --- pure helpers (no three.js, no DOM: mirrored in test/three.test.js) -----
+
+/** True only for a real, finite number — `null`/undefined are NOT numbers here.
+ *  (`isFinite(null)` is true, which would quietly turn a hole into z = 0.) */
+function num(v) { return typeof v === 'number' && Number.isFinite(v); }
+
+function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+
+/** Where z sits in [lo, hi], clamped to 0..1 (a flat span maps to 0.5). */
+function heightT(zv, lo, hi) {
+  if (!num(zv)) return 0;
+  if (!num(lo) || !num(hi) || hi <= lo) return 0.5;
+  return clamp01((zv - lo) / (hi - lo));
+}
+
+/** `#rgb` / `#rrggbb` -> [r, g, b] 0..255, or null when it is not hex.
+ *  Deliberately hex-only: the swatch is the single source of truth and a
+ *  half-typed value must never reach the canvas or the URL. */
+function parseHex(s) {
+  const t = String(s == null ? '' : s).trim().toLowerCase();
+  if (/^#[0-9a-f]{3}$/.test(t)) {
+    return [0, 1, 2].map(function (i) { return parseInt(t[i + 1] + t[i + 1], 16); });
+  }
+  if (/^#[0-9a-f]{6}$/.test(t)) {
+    return [0, 2, 4].map(function (i) { return parseInt(t.slice(i + 1, i + 3), 16); });
+  }
+  return null;
+}
+
+/** Mix two [r,g,b] triples in 0..1 working space (t = 0 -> a, 1 -> b). */
+function mixRgb(a, b, t) {
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+}
+
+/** sRGB -> linear-sRGB, the transfer three.js expects in a colour ATTRIBUTE
+ *  (a material colour set through THREE.Color is converted for you; a raw
+ *  Float32Array attribute is not, and would render visibly darker). */
+function srgbToLinear(c) {
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
+/** A "nice" axis step (1, 2 or 5 x 10^k) of about `target` size. */
+function niceStep(target) {
+  if (!num(target) || target <= 0) return 1;
+  const mag = Math.pow(10, Math.floor(Math.log10(target)));
+  const r = target / mag;
+  const m = r <= 1 ? 1 : (r <= 2 ? 2 : (r <= 5 ? 5 : 10));
+  return m * mag;
+}
+
+/** Tick values covering [lo, hi] with about `count` intervals, plus the step.
+ *  Always INSIDE the window so a tick number never floats off the surface. */
+function niceTicks(lo, hi, count) {
+  if (!num(lo) || !num(hi) || hi <= lo) return { values: [], step: 0 };
+  const step = niceStep((hi - lo) / Math.max(1, count));
+  const out = [];
+  const first = Math.ceil(lo / step) * step;
+  for (let v = first; v <= hi + step * 1e-9; v += step) {
+    out.push(Math.abs(v) < step * 1e-9 ? 0 : v);
+    if (out.length > 64) break; // a degenerate step cannot hang the page
+  }
+  return { values: out, step: step };
+}
+
+/** Trim a tick number for a sprite label ("0.5", "-2", "1e+3"). */
+function tickLabel(v) {
+  if (!num(v)) return '';
+  const a = Math.abs(v);
+  if (a !== 0 && (a < 1e-3 || a >= 1e5)) return v.toExponential(1);
+  return String(Math.round(v * 1e6) / 1e6);
+}
+
+/** Camera framing from the data bounds: centre + a distance that fits the whole
+ *  bounding box. Bounds are maths (x, y, z); the result is maths too.
+ *
+ *  The distance is derived from the box DIAGONAL, not its longest side: a
+ *  surface whose z range dwarfs its window (z = x^2 - y^2 spans 50 in z but only
+ *  10 in x and y) would otherwise be framed by the z span alone and the surface
+ *  would collapse into a sliver in the middle of the card. */
+function fitView(xlo, xhi, ylo, yhi, zlo, zhi) {
+  const cx = (xlo + xhi) / 2, cy = (ylo + yhi) / 2, cz = (zlo + zhi) / 2;
+  const dx = xhi - xlo, dy = yhi - ylo, dz = zhi - zlo;
+  const radius = Math.max(1e-6, 0.5 * Math.sqrt(dx * dx + dy * dy + dz * dz));
+  const half = (CAMERA_FOV / 2) * Math.PI / 180;
+  return {
+    target: [cx, cz, -cy],
+    span: radius * 2,
+    distance: radius / Math.sin(half) * 1.12,   // 12% margin so nothing touches the edge
+  };
+}
+
+/** Clamp an orbit angle: the pitch stops just short of the poles so the
+ *  camera never flips over or gimbal-locks at the top of the surface. */
+function clampPolar(p) { return Math.min(Math.PI - 0.02, Math.max(0.02, p)); }
+
+/** Camera position on the orbit sphere around `target`. */
+function camPos(target, distance, azimuth, polar) {
+  const sp = Math.sin(polar);
+  return [
+    target[0] + distance * sp * Math.sin(azimuth),
+    target[1] + distance * Math.cos(polar),
+    target[2] + distance * sp * Math.cos(azimuth),
+  ];
+}
+
+/**
+ * The whole WebGL payload for one surface: positions, per-vertex colours (from
+ * the height ramp), the triangle index, and the mesh-line positions.
+ *
+ * A cell touching a HOLE (`null`, i.e. the server found no real z there) is
+ * skipped: bridging it would draw a wall of triangles across an asymptote.
+ * Returns plain typed arrays, so this is testable without three.js or a DOM.
+ */
+function surfaceBuffers(xs, ys, zs, rampLow, rampHigh, zLo, zHi) {
+  const nx = xs.length, ny = ys.length;
+  const cLo = parseHex(rampLow) || [0, 0, 0];
+  const cHi = parseHex(rampHigh) || [0, 0, 0];
+  const a = cLo.map(function (c) { return srgbToLinear(c / 255); });
+  const b = cHi.map(function (c) { return srgbToLinear(c / 255); });
+  const position = new Float32Array(nx * ny * 3);
+  const color = new Float32Array(nx * ny * 3);
+  let finite = 0;
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      const zv = zs[j][i];
+      const ok = num(zv);
+      const k = (j * nx + i) * 3;
+      position[k] = xs[i];
+      position[k + 1] = ok ? zv : 0;      // a hole sits at z = 0; it is coloured
+      position[k + 2] = -ys[j];           // but never triangulated (see index)
+      const c = mixRgb(a, b, ok ? heightT(zv, zLo, zHi) : 0);
+      color[k] = c[0]; color[k + 1] = c[1]; color[k + 2] = c[2];
+      if (ok) finite++;
+    }
+  }
+  const index = [];
+  let cells = 0, holes = 0;
+  for (let j = 0; j < ny - 1; j++) {
+    for (let i = 0; i < nx - 1; i++) {
+      const v00 = zs[j][i], v10 = zs[j][i + 1], v11 = zs[j + 1][i + 1], v01 = zs[j + 1][i];
+      if (!num(v00) || !num(v10) || !num(v11) || !num(v01)) { holes++; continue; }
+      const p00 = j * nx + i, p10 = j * nx + i + 1, p11 = (j + 1) * nx + i + 1, p01 = (j + 1) * nx + i;
+      index.push(p00, p10, p11, p00, p11, p01);
+      cells++;
+    }
+  }
+  // Mesh lines are built cell-edge by cell-edge (rows then columns) instead of
+  // WireframeGeometry, which would also draw every triangle's DIAGONAL and make
+  // the quad grid look like a triangulation.
+  const wire = [];
+  const pushWire = function (i0, j0, i1, j1) {
+    if (!num(zs[j0][i0]) || !num(zs[j1][i1])) return;
+    wire.push(xs[i0], zs[j0][i0], -ys[j0], xs[i1], zs[j1][i1], -ys[j1]);
+  };
+  for (let j = 0; j < ny; j++) { for (let i = 0; i < nx - 1; i++) pushWire(i, j, i + 1, j); }
+  for (let i = 0; i < nx; i++) { for (let j = 0; j < ny - 1; j++) pushWire(i, j, i, j + 1); }
+  return {
+    position: position, color: color,
+    index: new Uint32Array(index), wire: new Float32Array(wire),
+    cells: cells, holes: holes, finite: finite,
+  };
+}
+
+/** FastAPI's 422 `detail` is an ARRAY of objects — rendering it straight into
+ *  textContent yields "[object Object]" (this was a real bug report on the 2D
+ *  page), so every error shape is flattened defensively. */
+function errorText(err) {
+  if (err == null) return 'Something went wrong.';
+  if (typeof err === 'string') return err;
+  if (Array.isArray(err)) return err.map(function (e) { return (e && e.msg) || errorText(e); }).join('; ');
+  if (typeof err === 'object') {
+    if (typeof err.msg === 'string') return err.msg;
+    if (err.detail !== undefined) return errorText(err.detail);
+    try { return JSON.stringify(err); } catch (e) { return String(err); }
+  }
+  return String(err);
+}
+
+// --- page state -------------------------------------------------------------
+
+const DMIN = -5, DMAX = 5;          // the server's default window (solver.py)
+const CAMERA_FOV = 45;              // degrees — shared by the camera and fitView
+// Default orbit: a 3/4 view from the +x/+y quadrant, high enough that a tall
+// surface (a saddle spans 50 in z against a 10-wide window) still reads as a
+// surface rather than a wall. Shared by the initial view AND Reset view.
+const DEFAULT_AZIMUTH = 0.85, DEFAULT_POLAR = 0.95;
+const X = 0, Y = 1, Z = 2;          // maths axis indices, for readability
+let payload = null;                 // the last /api/surface response
+let scene = null, camera = null, renderer = null, group = null;
+let lights = [];
+let surfaceMesh = null, wireLines = null;
+let view = { azimuth: DEFAULT_AZIMUTH, polar: DEFAULT_POLAR, distance: 20, target: [0, 0, 0], span: 10 };
+let wireOn = false, gridOn = true, axesOn = true;
+let rafPending = false;
+
+// --- theme ------------------------------------------------------------------
+
+function currentTheme() {
+  return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+}
+
+function cssVar(name, fallback) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name);
+  return (v && v.trim()) || fallback;
+}
+
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  try { localStorage.setItem('xygh:theme', t); } catch (e) {}
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', t === 'dark' ? '#0f172a' : '#f8fafc');
+  const btn = document.getElementById('themeBtn');
+  btn.innerHTML = t === 'dark' ? '&#9728;' : '&#9789;';
+  const label = t === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  if (scene) { scene.background = null; scene.fog = null; }
+  if (group) buildSceneHelpers();   // axes/grid colours come from the theme
+  updateLights();
+  requestRender();
+}
+
+// --- toast + error box ------------------------------------------------------
+
+let toastTimer = null;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { el.classList.remove('show'); }, 2600);
+}
+
+function showError(msg) {
+  const el = document.getElementById('error');
+  el.textContent = msg;
+  el.hidden = false;
+}
+
+function clearError() { document.getElementById('error').hidden = true; }
+
+// --- fetching ---------------------------------------------------------------
+
+function surfaceQuery() {
+  const p = new URLSearchParams();
+  p.append('formula', document.getElementById('formula').value.trim());
+  const pairs = [['x_min', 'xMin'], ['x_max', 'xMax'], ['y_min', 'yMin'], ['y_max', 'yMax']];
+  pairs.forEach(function (pair) {
+    const raw = document.getElementById(pair[1]).value.trim();
+    if (raw !== '') p.append(pair[0], raw);
+  });
+  const g = document.getElementById('gridN').value.trim();
+  if (g !== '') p.append('grid', g);
+  return p;
+}
+
+function shareUrl() {
+  return location.origin + '/3d?' + surfaceQuery().toString()
+    + '&ramp=' + encodeURIComponent(document.getElementById('rampLow').value)
+    + '&ramp=' + encodeURIComponent(document.getElementById('rampHigh').value);
+}
+
+async function plot() {
+  if (!renderer) return;
+  clearError();
+  const formula = document.getElementById('formula').value.trim();
+  if (!formula) {
+    showError('Enter a surface formula, e.g. z = sin(x) * cos(y).');
+    return;
+  }
+  document.getElementById('status').textContent = 'Solving…';
+  let data;
+  try {
+    const r = await fetch('/api/surface?' + surfaceQuery().toString());
+    const body = await r.json().catch(function () { return null; });
+    if (!r.ok) {
+      showError('Cannot plot that: ' + errorText(body && body.detail !== undefined ? body.detail : body));
+      document.getElementById('status').textContent = '';
+      return;
+    }
+    data = body;
+  } catch (e) {
+    // three.js itself is cached by the service worker, but the z-grid is
+    // computed by the app — so offline is a clear message, not a blank card.
+    showError('Could not reach the grapher. A surface is computed on the server, so the 3D page needs a connection — the 2D page still plots offline.');
+    document.getElementById('status').textContent = '';
+    return;
+  }
+  payload = data;
+  history.replaceState(null, '', '/3d?' + surfaceQuery().toString());
+  drawSurface();
+}
+
+// --- rendering --------------------------------------------------------------
+
+function drawSurface() {
+  if (!renderer || !payload) return;
+  const xs = payload.x, ys = payload.y, s0 = payload.surfaces[0];
+  const zrb = s0.z_robust;
+  const zlo = num(zrb.min) ? zrb.min : s0.z_range.min;
+  const zhi = num(zrb.max) ? zrb.max : s0.z_range.max;
+  const rampLow = document.getElementById('rampLow').value;
+  const rampHigh = document.getElementById('rampHigh').value;
+
+  disposeGroup();
+  group = new THREE.Group();
+  scene.add(group);
+
+  const buf = surfaceBuffers(xs, ys, s0.z, rampLow, rampHigh, zlo, zhi);
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(buf.position, 3));
+  geom.setAttribute('color', new THREE.BufferAttribute(buf.color, 3));
+  geom.setIndex(new THREE.BufferAttribute(buf.index, 1));
+  geom.computeVertexNormals();
+
+  const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({
+    vertexColors: true, side: THREE.DoubleSide, roughness: 0.72, metalness: 0.04,
+    flatShading: false, transparent: true, opacity: 1.0,
+  }));
+  surfaceMesh = mesh;
+  group.add(mesh);
+
+  const wgeom = new THREE.BufferGeometry();
+  wgeom.setAttribute('position', new THREE.BufferAttribute(buf.wire, 3));
+  wireLines = new THREE.LineSegments(wgeom, new THREE.LineBasicMaterial({
+    color: new THREE.Color(cssVar('--fg-soft', '#334155')),
+    transparent: true, opacity: 0.28,
+  }));
+  wireLines.visible = wireOn;
+  group.add(wireLines);
+
+  const fit = fitView(payload.x_range.min, payload.x_range.max,
+                      payload.y_range.min, payload.y_range.max, zlo, zhi);
+  view.target = fit.target.slice();
+  view.span = fit.span;
+  view.distance = fit.distance;
+  buildSceneHelpers();
+
+  const holes = buf.holes;
+  document.getElementById('status').textContent =
+    xs.length + ' × ' + ys.length + ' samples · z from ' + tickLabel(s0.z_range.min)
+    + ' to ' + tickLabel(s0.z_range.max)
+    + (holes ? ' · ' + holes + ' cell' + (holes === 1 ? '' : 's') + ' left out (no real z there)' : '');
+  requestRender();
+}
+
+function updateLights() {
+  if (!scene) return;
+  lights.forEach(function (l) { scene.remove(l); });
+  const dark = currentTheme() === 'dark';
+  const hemi = new THREE.HemisphereLight(0xffffff, dark ? 0x1e293b : 0xcbd5e1, dark ? 1.05 : 1.25);
+  const dir = new THREE.DirectionalLight(0xffffff, dark ? 1.5 : 1.7);
+  dir.position.set(1, 1.6, 0.8);
+  const amb = new THREE.AmbientLight(0xffffff, dark ? 0.35 : 0.5);
+  lights = [hemi, dir, amb];
+  // Removal first, then add: mutating the list mid-traverse() would skip
+  // nodes, so the lights are tracked in an array instead.
+  lights.forEach(function (l) { scene.add(l); });
+}
+
+/** Axes, tick numbers and the z = 0 grid — rebuilt whenever the window, the
+ *  theme or the toggles change. Everything lives in `axisGroup`. */
+let axisGroup = null;
+
+function makeLabel(text, cssColor, px, overSurface) {
+  const pad = 6, font = '600 ' + (px || 30) + 'px "Neucha", system-ui, sans-serif';
+  const c = document.createElement('canvas');
+  const ctx = c.getContext('2d');
+  ctx.font = font;
+  const w = Math.ceil(ctx.measureText(text).width) + pad * 2;
+  const h = (px || 30) + pad * 2;
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  g.font = font;
+  g.fillStyle = cssColor;
+  g.textBaseline = 'middle';
+  g.textAlign = 'center';
+  g.fillText(text, w / 2, h / 2);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  // `overSurface`: the x/y/z letters always read (they sit off the surface, at
+  // the axis ends); the tick NUMBERS are depth-tested instead, so the ones the
+  // surface hides stay hidden rather than painting over it.
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: tex, transparent: true, depthTest: !!overSurface, depthWrite: false,
+  }));
+  // World size proportional to the model (0.035 of the framed span per 30px of
+  // label), so labels stay readable at any zoom without swamping a small
+  // surface: at the default saddle a tick number is ~22px on a 560px card.
+  const k = (px || 30) / 30 * view.span * 0.035;
+  sprite.scale.set(k * (w / h), k, 1);
+  return sprite;
+}
+
+function buildSceneHelpers() {
+  if (!scene) return;
+  if (axisGroup) { disposeObject(axisGroup); scene.remove(axisGroup); }
+  axisGroup = new THREE.Group();
+  scene.add(axisGroup);
+  axisGroup.visible = axesOn || gridOn;
+  if (!payload) return;
+
+  const xlo = payload.x_range.min, xhi = payload.x_range.max;
+  const ylo = payload.y_range.min, yhi = payload.y_range.max;
+  const s0 = payload.surfaces[0];
+  const zrb = s0.z_robust;
+  const zlo = num(zrb.min) ? zrb.min : s0.z_range.min;
+  const zhi = num(zrb.max) ? zrb.max : s0.z_range.max;
+  const ex = Math.max(Math.abs(xlo), Math.abs(xhi)) || 1;
+  const ey = Math.max(Math.abs(ylo), Math.abs(yhi)) || 1;
+  const ez = Math.max(Math.abs(zlo), Math.abs(zhi)) || 1;
+  const cX = cssVar('--axis-x', '#dc2626');
+  const cY = cssVar('--axis-y', '#16a34a');
+  const cZ = cssVar('--axis-z', '#2563eb');
+
+  // z = 0 plane grid. It is the maths z = 0 plane, which is three's XZ plane
+  // at y = 0, offset to the centre of the (x, y) window.
+  if (gridOn) {
+    const size = 2 * Math.max(ex, ey);
+    const gh = new THREE.GridHelper(size, 10,
+      new THREE.Color(cssVar('--border', '#cbd5e1')),
+      new THREE.Color(cssVar('--border', '#cbd5e1')));
+    gh.material.transparent = true;
+    gh.material.opacity = 0.55;
+    gh.position.set((xlo + xhi) / 2, 0, -(ylo + yhi) / 2);
+    axisGroup.add(gh);
+  }
+
+  if (axesOn) {
+    const axis = function (from, to, cssColor) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(
+        [from[0], from[1], from[2], to[0], to[1], to[2]]), 3));
+      return new THREE.Line(g, new THREE.LineBasicMaterial({ color: new THREE.Color(cssColor) }));
+    };
+    axisGroup.add(axis([-ex, 0, 0], [ex, 0, 0], cX));   // maths x  (three x)
+    axisGroup.add(axis([0, 0, ey], [0, 0, -ey], cY));   // maths y  (three -z)
+    axisGroup.add(axis([0, -ez, 0], [0, ez, 0], cZ));   // maths z  (three y)
+
+    const letter = function (text, pos, cssColor) {
+      const s = makeLabel(text, cssColor, 40, true);
+      s.position.set(pos[0], pos[1], pos[2]);
+      axisGroup.add(s);
+    };
+    letter('x', [ex * 1.06, 0, 0], cX);
+    letter('y', [0, 0, -ey * 1.06], cY);
+    letter('z', [0, ez * 1.06, 0], cZ);
+
+    // Tick numbers: right on each axis, nudged off it so they do not sit on
+    // the line (and skipped at 0 on all three axes — it is the same point).
+    const off = view.span * 0.035;
+    const mk = function (lo, hi, cssColor, pos, skipZero) {
+      niceTicks(lo, hi, 5).values.forEach(function (v) {
+        if (skipZero && Math.abs(v) < 1e-9) return;
+        const s = makeLabel(tickLabel(v), cssColor, 26);
+        s.position.set(pos(v)[0], pos(v)[1], pos(v)[2]);
+        axisGroup.add(s);
+      });
+    };
+    mk(xlo, xhi, cX, function (v) { return [v, -off, 0]; }, true);
+    mk(ylo, yhi, cY, function (v) { return [-off, -off, -v]; }, true);
+    mk(zlo, zhi, cZ, function (v) { return [-off, v, 0]; }, true);
+  }
+}
+
+function disposeObject(obj) {
+  obj.traverse(function (o) {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) {
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      mats.forEach(function (m) { if (m.map) m.map.dispose(); m.dispose(); });
+    }
+  });
+}
+
+function disposeGroup() {
+  if (axisGroup) { disposeObject(axisGroup); scene.remove(axisGroup); axisGroup = null; }
+  if (group) { disposeObject(group); scene.remove(group); group = null; }
+  surfaceMesh = null; wireLines = null;
+}
+
+function applyCamera() {
+  const p = camPos(view.target, view.distance, view.azimuth, view.polar);
+  camera.position.set(p[0], p[1], p[2]);
+  camera.lookAt(view.target[0], view.target[1], view.target[2]);
+  // Keep the near/far planes proportional to what is on screen; a spike that
+  // runs off the framed range is simply clipped by the far plane.
+  camera.near = Math.max(0.01, view.distance * 0.01);
+  camera.far = view.distance * 40;
+  camera.updateProjectionMatrix();
+}
+
+function requestRender() {
+  if (rafPending || !renderer) return;
+  rafPending = true;
+  requestAnimationFrame(function () {
+    rafPending = false;
+    applyCamera();
+    renderer.render(scene, camera);
+  });
+}
+
+function resetView() {
+  if (!payload) return;
+  const s0 = payload.surfaces[0];
+  const zrb = s0.z_robust;
+  const fit = fitView(payload.x_range.min, payload.x_range.max,
+                      payload.y_range.min, payload.y_range.max,
+                      num(zrb.min) ? zrb.min : s0.z_range.min,
+                      num(zrb.max) ? zrb.max : s0.z_range.max);
+  view.target = fit.target.slice();
+  view.span = fit.span;
+  view.distance = fit.distance;
+  view.azimuth = DEFAULT_AZIMUTH;
+  view.polar = DEFAULT_POLAR;
+  requestRender();
+}
+
+function resize() {
+  if (!renderer) return;
+  const box = document.getElementById('graphbox');
+  const w = box.clientWidth, h = box.clientHeight;
+  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+  renderer.setSize(w, h, false);
+  renderer.domElement.style.width = '100%';
+  renderer.domElement.style.height = '100%';
+  requestRender();
+}
+
+// --- interaction ------------------------------------------------------------
+
+const pointers = new Map();
+let pinchStart = 0, pinchDistance0 = 1;
+
+function onPointerDown(e) {
+  const cv = renderer.domElement;
+  try { cv.setPointerCapture(e.pointerId); } catch (err) { /* older browsers */ }
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, button: e.button });
+  pinchStart = 0;
+  cv.classList.add('dragging');
+  e.preventDefault();
+}
+
+function onPointerMove(e) {
+  if (!pointers.has(e.pointerId)) return;
+  const prev = pointers.get(e.pointerId);
+  const cur = { x: e.clientX, y: e.clientY, button: prev.button };
+  pointers.set(e.pointerId, cur);
+  const dx = cur.x - prev.x, dy = cur.y - prev.y;
+  if (pointers.size >= 2) {
+    // Two fingers: pinch to zoom (anchored on the window, like the 2D page's
+    // pinch — a single-pointer drag state silently ignores the second finger).
+    const pts = Array.from(pointers.values());
+    const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    if (!pinchStart) { pinchStart = d; pinchDistance0 = view.distance; return; }
+    view.distance = Math.min(view.span * 20, Math.max(view.span * 0.08, pinchDistance0 * (pinchStart / Math.max(1, d))));
+  } else if (prev.button === 2 || e.shiftKey) {
+    panByPixels(dx, dy);
+  } else {
+    view.azimuth -= dx * 0.008;
+    view.polar = clampPolar(view.polar - dy * 0.008);
+    // A drag must not scroll the page underneath the canvas.
+    e.preventDefault();
+  }
+  requestRender();
+}
+
+function onPointerUp(e) {
+  pointers.delete(e.pointerId);
+  pinchStart = 0;
+  if (pointers.size === 0) renderer.domElement.classList.remove('dragging');
+}
+
+function panByPixels(dx, dy) {
+  camera.updateMatrixWorld();
+  const right = new THREE.Vector3(), up = new THREE.Vector3();
+  camera.matrixWorld.extractBasis(right, up, new THREE.Vector3());
+  const k = view.distance * 0.0016;
+  view.target[0] += -right.x * dx * k + up.x * dy * k;
+  view.target[1] += -right.y * dx * k + up.y * dy * k;
+  view.target[2] += -right.z * dx * k + up.z * dy * k;
+}
+
+function onWheel(e) {
+  e.preventDefault();
+  view.distance = Math.min(view.span * 20, Math.max(view.span * 0.08, view.distance * Math.exp(e.deltaY * 0.0012)));
+  requestRender();
+}
+
+// --- export + share (client-side only — no server endpoint) -----------------
+
+function pngName() {
+  const f = document.getElementById('formula').value.trim().replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '');
+  return 'surface-' + (f || 'graph') + '.png';
+}
+
+function exportPng() {
+  if (!renderer) return;
+  requestRender();
+  renderer.render(scene, camera);   // make sure the buffer is current
+  const src = renderer.domElement;
+  // The canvas is TRANSPARENT (the card colour shows through), so compositing
+  // onto the card colour is what keeps the PNG from having a see-through
+  // background — the same trap the video export hit with H.264.
+  const off = document.createElement('canvas');
+  off.width = src.width; off.height = src.height;
+  const ctx = off.getContext('2d');
+  ctx.fillStyle = cssVar('--card', '#ffffff');
+  ctx.fillRect(0, 0, off.width, off.height);
+  ctx.drawImage(src, 0, 0);
+  off.toBlob(function (blob) {
+    if (!blob) { toast('Could not encode the PNG.'); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = pngName();
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    toast('Saved ' + pngName());
+  }, 'image/png');
+}
+
+function copyLink() {
+  const url = shareUrl();
+  const fallback = function () {
+    showError('Copy this link: ' + url);
+    toast('Copy failed — the link is shown below the graph.');
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(function () { toast('Link copied'); }, fallback);
+  } else {
+    fallback();
+  }
+}
+
+// --- wiring -----------------------------------------------------------------
+
+function setToggle(btn, on) {
+  btn.classList.toggle('on', on);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+}
+
+function rampFromBox(swatchId, boxId) {
+  const box = document.getElementById(boxId);
+  const rgb = parseHex(box.value);
+  if (!rgb) {
+    toast('Use a hex colour like #2563eb');
+    box.value = document.getElementById(swatchId).value;
+    return false;
+  }
+  const hex = '#' + rgb.map(function (c) { return ('0' + c.toString(16)).slice(-2); }).join('');
+  document.getElementById(swatchId).value = hex;
+  box.value = hex;
+  return true;
+}
+
+function recolor() {
+  // A ramp change is presentation only: rebuild the colour attribute from the
+  // payload we already have, with no refetch.
+  if (!payload) return;
+  const s0 = payload.surfaces[0];
+  const zrb = s0.z_robust;
+  const zlo = num(zrb.min) ? zrb.min : s0.z_range.min;
+  const zhi = num(zrb.max) ? zrb.max : s0.z_range.max;
+  const buf = surfaceBuffers(payload.x, payload.y, s0.z,
+    document.getElementById('rampLow').value, document.getElementById('rampHigh').value, zlo, zhi);
+  surfaceMesh.geometry.setAttribute('color', new THREE.BufferAttribute(buf.color, 3));
+  surfaceMesh.geometry.attributes.color.needsUpdate = true;
+  requestRender();
+}
+
+function boot() {
+  const box = document.getElementById('graphbox');
+  if (!window.THREE) {
+    showError('three.js could not be loaded'
+      + (window.THREE_ERROR ? ' (' + window.THREE_ERROR + ')' : '')
+      + '. A surface still needs the app to be reachable — reconnect once and the browser will cache it.');
+    document.getElementById('status').textContent = '';
+    return;
+  }
+  renderer = new THREE.WebGLRenderer({
+    canvas: document.getElementById('view'),
+    antialias: true,
+    alpha: true,
+    // Needed so "Save PNG" can read the canvas after render() — without it the
+    // drawing buffer is cleared before toBlob/drawImage gets to it.
+    preserveDrawingBuffer: true,
+  });
+  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+  renderer.setSize(box.clientWidth, box.clientHeight, false);
+  // Transparent canvas: the card behind it supplies the background, so a theme
+  // switch costs no re-render of the scene colours.
+  renderer.setClearColor(0x000000, 0);
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(CAMERA_FOV, box.clientWidth / Math.max(1, box.clientHeight), 0.1, 1000);
+  updateLights();
+
+  const cv = renderer.domElement;
+  cv.addEventListener('pointerdown', onPointerDown);
+  cv.addEventListener('pointermove', onPointerMove);
+  cv.addEventListener('pointerup', onPointerUp);
+  cv.addEventListener('pointercancel', onPointerUp);
+  cv.addEventListener('wheel', onWheel, { passive: false });
+  cv.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  cv.addEventListener('dblclick', resetView);
+  window.addEventListener('resize', resize);
+  cv.addEventListener('gesturestart', function (e) { e.preventDefault(); });
+
+  document.getElementById('form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    plot();
+  });
+  document.getElementById('resetBtn').addEventListener('click', resetView);
+  document.getElementById('pngBtn').addEventListener('click', exportPng);
+  document.getElementById('linkBtn').addEventListener('click', copyLink);
+  document.getElementById('themeBtn').addEventListener('click', function () {
+    applyTheme(currentTheme() === 'dark' ? 'light' : 'dark');
+  });
+  document.getElementById('wireBtn').addEventListener('click', function () {
+    wireOn = !wireOn;
+    setToggle(this, wireOn);
+    if (wireLines) wireLines.visible = wireOn;
+    requestRender();
+  });
+  document.getElementById('gridBtn').addEventListener('click', function () {
+    gridOn = !gridOn;
+    setToggle(this, gridOn);
+    buildSceneHelpers();
+    requestRender();
+  });
+  document.getElementById('axisBtn').addEventListener('click', function () {
+    axesOn = !axesOn;
+    setToggle(this, axesOn);
+    buildSceneHelpers();
+    requestRender();
+  });
+  document.querySelectorAll('#samples .chip').forEach(function (chip) {
+    chip.addEventListener('click', function () {
+      document.getElementById('formula').value = chip.textContent;
+      plot();
+    });
+  });
+  ['rampLow', 'rampHigh'].forEach(function (id, idx) {
+    const boxId = idx === 0 ? 'hexLow' : 'hexHigh';
+    document.getElementById(id).addEventListener('input', function () {
+      document.getElementById(boxId).value = this.value;
+      recolor();
+    });
+  });
+  ['hexLow', 'hexHigh'].forEach(function (boxId, idx) {
+    const swatchId = idx === 0 ? 'rampLow' : 'rampHigh';
+    const apply = function () {
+      if (rampFromBox(swatchId, boxId)) recolor();
+    };
+    document.getElementById(boxId).addEventListener('change', apply);
+    document.getElementById(boxId).addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { apply(); e.preventDefault(); }
+    });
+  });
+  setToggle(document.getElementById('wireBtn'), wireOn);
+  setToggle(document.getElementById('gridBtn'), gridOn);
+  setToggle(document.getElementById('axisBtn'), axesOn);
+
+  let savedTheme = 'light';
+  try { savedTheme = localStorage.getItem('xygh:theme') || 'light'; } catch (e) {}
+  applyTheme(savedTheme === 'dark' ? 'dark' : 'light');
+  plot();
+}
+
+// The app script also runs in a `vm` sandbox with no DOM (test/three.test.js),
+// so booting is guarded and the pure helpers stay reachable through `__api`.
+if (typeof window !== 'undefined' && typeof document !== 'undefined' && document.addEventListener) {
+  const start = function () { boot(); };
+  if (window.THREE) start();
+  else window.addEventListener('three-ready', start, { once: true });
+}
+
+// --- PWA: register the service worker (same worker as the 2D page) ----------
+// Independent of boot() so a registration failure can never affect plotting.
+if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator
+    && (window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', function () {
+    if (hadController) window.location.reload();
+  });
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('/sw.js').catch(function () { /* best-effort */ });
+  });
+}
+
+// Pure helpers exposed for the node test suite (test/three.test.js) — add any
+// new pure helper here or it silently stays uncovered. test_api.py asserts
+// this list and the destructuring list in three.test.js are IDENTICAL.
+var __api = {
+  num: num, clamp01: clamp01, heightT: heightT, parseHex: parseHex, mixRgb: mixRgb,
+  srgbToLinear: srgbToLinear, niceStep: niceStep, niceTicks: niceTicks, tickLabel: tickLabel,
+  fitView: fitView, clampPolar: clampPolar, camPos: camPos,
+  surfaceBuffers: surfaceBuffers, errorText: errorText,
+};
+</script>
+</body>
+</html>

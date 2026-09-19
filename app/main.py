@@ -2,7 +2,9 @@
 
 Endpoints:
     GET /             renders the graph page (formula via ?formula= query param)
+    GET /3d           renders the 3D surface page (z = f(x, y), three.js)
     GET /api/points   returns the (x, y) points for a formula as JSON
+    GET /api/surface  returns a z-grid for z = f(x, y) as JSON
     GET /metrics      Prometheus-style observability counters
     GET /health       liveness probe
 """
@@ -21,7 +23,7 @@ from . import solver
 
 log = logging.getLogger("xy-graph-gen")
 
-app = FastAPI(title="xy-graph-gen", version="0.9.0")
+app = FastAPI(title="xy-graph-gen", version="0.10.0")
 
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
@@ -34,6 +36,19 @@ _ICON_RE = re.compile(r"^[a-z0-9][a-z0-9-]*\.png$")
 DEFAULT_FORMULA = "x + y = 3"
 MAX_FORMULAS = 5
 MODES = {"cartesian", "polar"}
+
+# --- 3D surfaces (GET /3d, GET /api/surface) --------------------------------
+# 3D is a SEPARATE ROUTE, not a third `mode=` value: its request/response shape
+# (a z-grid sampled over an (x, y) window) has nothing in common with the 2D
+# branch-of-points schema, and a separate template leaves the 4 500-line 2D app
+# untouched. The two pages share the solver (eval_ast2), the colour scheme and
+# the URL-state conventions.
+DEFAULT_SURFACE_FORMULA = "z = x^2 - y^2"
+# Height ramp: the colour at the LOWEST z and at the HIGHEST z. Same
+# start->end idea as the 2D page's per-row gradient, so both pages read alike.
+DEFAULT_SURFACE_RAMP = ["#2563eb", "#dc2626"]
+SURFACE_GRID_MIN = 4
+_GRID_MAX = solver.SURFACE_GRID_MAX  # one source of truth for the cap
 
 # Default line colours for formula rows, in row order. MUST mirror the JS
 # `CURVE_PALETTE` array in templates/index.html — test_template_palette_matches_js
@@ -312,6 +327,33 @@ def _clean_rotations(raw: list[str], n: int) -> list[str]:
     return rotations
 
 
+def _clean_ramp(raw: list[str]) -> list[str]:
+    """Validate repeated ``ramp`` params (low-z colour, high-z colour).
+
+    Missing/invalid entries fall back to ``DEFAULT_SURFACE_RAMP`` position by
+    position, so a hand-written ``?ramp=`` param can never inject markup.
+    """
+    out = []
+    for i in range(2):
+        c = raw[i].strip().lower() if i < len(raw) else ""
+        out.append(c if _COLOR_RE.fullmatch(c) else DEFAULT_SURFACE_RAMP[i])
+    return out
+
+
+def _clean_grid(raw: str | None) -> str:
+    """Validate the 3D ``grid`` param (cells per axis) — blank when invalid.
+
+    Kept as a STRING (like x_min/x_max) so the input round-trips through the
+    share URL exactly as typed; the template's ``type=number`` input cannot
+    submit an out-of-range value anyway.
+    """
+    v = (raw or "").strip()
+    if not _NUM_RE.fullmatch(v):
+        return ""
+    n = int(float(v))
+    return str(n) if SURFACE_GRID_MIN <= n <= _GRID_MAX else ""
+
+
 def _check_mode(mode: str) -> None:
     if mode not in MODES:
         raise HTTPException(status_code=400, detail="mode must be 'cartesian' or 'polar'.")
@@ -475,6 +517,50 @@ def index(
     return resp
 
 
+@app.get("/3d", response_class=HTMLResponse)
+def three_d(
+    request: Request,
+    formula: list[str] = Query(default=[DEFAULT_SURFACE_FORMULA]),
+    x_min: str | None = None,
+    x_max: str | None = None,
+    y_min: str | None = None,
+    y_max: str | None = None,
+    grid: str | None = None,
+    ramp: list[str] = Query(default=[]),
+) -> HTMLResponse:
+    """Render the 3D surface page (``z = f(x, y)`` drawn with three.js).
+
+    Repeated ``?formula=…`` params pre-fill the surface rows (max
+    MAX_FORMULAS, same as the 2D page). ``x_min``/``x_max``/``y_min``/``y_max``
+    set the sampling window, ``grid`` the cells per axis, and repeated
+    ``?ramp=#rrggbb&ramp=#rrggbb`` the height ramp (colour at the lowest z,
+    then at the highest z). Every value is validated and kept as a STRING so
+    it round-trips through the share URL exactly as typed.
+    """
+    formulas = _clean_formulas(formula) or [DEFAULT_SURFACE_FORMULA]
+    resp = templates.TemplateResponse(
+        request=request,
+        name="three.html",
+        context={
+            "formulas": formulas[:MAX_FORMULAS],
+            "ramp": _clean_ramp(ramp),
+            "x_min": (x_min or "").strip() if _NUM_RE.fullmatch((x_min or "").strip()) else "",
+            "x_max": (x_max or "").strip() if _NUM_RE.fullmatch((x_max or "").strip()) else "",
+            "y_min": (y_min or "").strip() if _NUM_RE.fullmatch((y_min or "").strip()) else "",
+            "y_max": (y_max or "").strip() if _NUM_RE.fullmatch((y_max or "").strip()) else "",
+            "grid": _clean_grid(grid),
+            "default_grid": solver.SURFACE_GRID_DEFAULT,
+            "grid_min": SURFACE_GRID_MIN,
+            "grid_max": _GRID_MAX,
+            "app_version": app.version,
+        },
+    )
+    # Same reason as `/`: the page and the API must never drift apart in a
+    # browser cache (see the phantom "object error" report).
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 @app.get("/api/points")
 def api_points(
     formula: list[str] = Query(default=[DEFAULT_FORMULA]),
@@ -568,6 +654,79 @@ def _point(p) -> dict:
         d["theta"] = p[2]
         d["r"] = p[3]
     return d
+
+
+@app.get("/api/surface")
+def api_surface(
+    formula: list[str] = Query(default=[DEFAULT_SURFACE_FORMULA]),
+    x_min: float | None = None,
+    x_max: float | None = None,
+    y_min: float | None = None,
+    y_max: float | None = None,
+    grid: int | None = None,
+    response: Response = None,
+) -> dict:
+    """Sample ``z = f(x, y)`` over an (x, y) window and return the z-grid.
+
+    Repeated ``?formula=…`` params (max MAX_FORMULAS) each become one surface.
+    Each formula is ``z = f(x, y)`` (a bare ``f(x, y)`` is accepted; ``z`` may
+    only appear on the left). ``x_min``/``x_max``/``y_min``/``y_max`` set the
+    window (default ±5 on both axes) and ``grid`` the number of cells per axis
+    (4..120, default 48).
+
+    Returns ``{"formulas", "x_range", "y_range", "grid", "x", "y",
+    "surfaces": [{"formula", "display", "z", "z_range", "z_robust"}]}`` where
+    ``z[j][i]`` is the value at ``(x[i], y[j])`` and ``None`` marks a HOLE
+    (undefined / non-finite) the renderer must not triangulate. ``z_range`` is
+    the true (min, max) of the finite samples; ``z_robust`` is the
+    2nd–98th percentile pair the view frames itself with, so one spike cannot
+    shrink the surface to a speck. Invalid formulas return ``400`` with a
+    human-readable ``detail``; responses are cached for ``_CACHE_TTL`` seconds
+    (``X-Cache: HIT|MISS``).
+    """
+    formulas = _clean_formulas(formula)
+    if not formulas:
+        raise HTTPException(status_code=400, detail="Enter a formula first.")
+    if len(formulas) > MAX_FORMULAS:
+        raise HTTPException(status_code=400, detail=f"At most {MAX_FORMULAS} surfaces per graph.")
+
+    key = ("surface", tuple(formulas), x_min, x_max, y_min, y_max, grid)
+    cached = _cache_get(key)
+    if cached is not None:
+        if response is not None:
+            response.headers["X-Cache"] = "HIT"
+        return cached
+
+    try:
+        results = [
+            solver.generate_surface(f, x_min, x_max, y_min, y_max, grid) for f in formulas
+        ]
+    except solver.SolverError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    first = results[0]  # all surfaces share one window, so x/y/grid are common
+    payload = {
+        "formulas": formulas,
+        "x_range": {"min": first["x_range"][0], "max": first["x_range"][1]},
+        "y_range": {"min": first["y_range"][0], "max": first["y_range"][1]},
+        "grid": first["grid"],
+        "x": first["x"],
+        "y": first["y"],
+        "surfaces": [
+            {
+                "formula": f,
+                "display": r["solution"]["display"],
+                "z": r["z"],
+                "z_range": {"min": r["z_range"][0], "max": r["z_range"][1]},
+                "z_robust": {"min": r["z_robust"][0], "max": r["z_robust"][1]},
+            }
+            for f, r in zip(formulas, results)
+        ],
+    }
+    _cache_set(key, payload)
+    if response is not None:
+        response.headers["X-Cache"] = "MISS"
+    return payload
 
 
 @app.get("/health")

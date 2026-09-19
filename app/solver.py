@@ -54,6 +54,13 @@ IMPLICIT_GRID_DEFAULT = 150   # grid cells per axis when no x_step is given
 IMPLICIT_GRID_MAX = 250       # hard cap on grid cells per axis
 MAX_IMPLICIT_POINTS = 20_000  # total contour points cap per curve
 
+# 3D surfaces (z = f(x, y)). A square ±5 window frames the textbook surfaces
+# (saddle, paraboloid, sin(x)·cos(y)) without touching the range inputs, and
+# 48 cells keeps the JSON payload ~25 KB per surface (49×49 samples).
+DEFAULT_SURFACE_MIN, DEFAULT_SURFACE_MAX = -5.0, 5.0
+SURFACE_GRID_DEFAULT = 48     # grid cells per axis for a surface
+SURFACE_GRID_MAX = 120        # hard cap (121×121 = 14 641 samples)
+
 # --- inequalities (y > 2x + 1 etc.) ---
 _INEQ_OPS = (">=", "<=", ">", "<")
 
@@ -1215,12 +1222,21 @@ def generate_points(
 # ============================================================================
 
 def _safe_eval2(F, x: float, y: float) -> float:
-    """Evaluate F(x, y), returning NaN for domain errors / blow-ups."""
+    """Evaluate F(x, y), returning NaN for domain errors / blow-ups.
+
+    Also guards the COMPLEX result of a fractional power of a negative base
+    (``(-8) ** 0.5`` is complex in Python, and ``math.isfinite`` then raises
+    ``TypeError``): an implicit formula like ``x^0.5 + y = 0`` used to answer
+    HTTP 500 instead of 400 because of this. A non-real sample is simply not
+    a real point of the curve, i.e. NaN.
+    """
     try:
         v = eval_ast2(F, x, y)
-    except (ValueError, ZeroDivisionError, OverflowError):
+    except (ValueError, ZeroDivisionError, OverflowError, TypeError):
         return float("nan")
-    return v if math.isfinite(v) else float("nan")
+    if isinstance(v, complex) or not math.isfinite(v):
+        return float("nan")
+    return v
 
 
 def _cell_segments(v00, v10, v11, v01, x0, y0, x1, y1):
@@ -1357,6 +1373,134 @@ def _marching_squares(F, x_lo, x_hi, y_lo, y_hi, nx, ny) -> list:
             )
             segments.extend(segs)
     return _chain_segments(segments)
+
+
+# ============================================================================
+# 3D surfaces: z = f(x, y) sampled on a rectangular grid
+# ============================================================================
+
+def _parse_surface(raw: str) -> dict:
+    """Parse a surface formula (``z = f(x, y)``, or a bare ``f(x, y)``).
+
+    Returns ``{"kind": "surface", "expr": AST, "display": "z = …"}``. The
+    evaluator is the same two-variable AST the implicit curves use
+    (:func:`eval_ast2`) — a surface needs no new maths, only a grid.
+
+    ``z`` is the surface's OUTPUT, never an input: it may only appear on the
+    left of the ``=``. A ``z`` on the right is a name the parser does not know,
+    and its generic "Unknown symbol" message would be useless here, so it is
+    translated into what the user actually did wrong.
+    """
+    s = raw.strip()
+    if not s:
+        raise SolverError("Enter a formula first.")
+    lhs, rhs = "", s
+    if "=" in s:
+        lhs, rhs = (part.strip() for part in s.split("=", 1))
+    if lhs and lhs.replace(" ", "").lower() not in ("z", "f(x,y)"):
+        raise SolverError("A 3D surface is written as z = f(x, y).")
+    if not rhs:
+        raise SolverError("A 3D surface is written as z = f(x, y).")
+    try:
+        expr = _simplify(parse_expr(rhs))
+    except SolverError as exc:
+        if str(exc).startswith("Unknown symbol 'z'"):
+            raise SolverError(
+                "A 3D surface is written as z = f(x, y) — z may only appear "
+                "on the left of the =."
+            ) from exc
+        raise
+    return {"kind": "surface", "expr": expr, "display": f"z = {rhs}"}
+
+
+def _percentile(values: list[float], frac: float) -> float:
+    """Value at ``frac`` (0..1) of an ALREADY-SORTED list (nearest rank)."""
+    if not values:
+        return float("nan")
+    idx = int(round(frac * (len(values) - 1)))
+    return values[max(0, min(len(values) - 1, idx))]
+
+
+def generate_surface(
+    raw: str,
+    x_min: float | None = None,
+    x_max: float | None = None,
+    y_min: float | None = None,
+    y_max: float | None = None,
+    grid: int | None = None,
+) -> dict:
+    """Sample ``z = f(x, y)`` over a rectangular (x, y) window.
+
+    Returns ``{solution, x_range, y_range, grid, x, y, z, z_range, z_robust}``
+    where ``z`` is ``ny + 1`` rows of ``nx + 1`` samples — ``z[j][i]`` is the
+    value at ``(x[i], y[j])`` — with ``None`` wherever ``f`` is undefined
+    (domain error, division by zero, NaN/∞). ``None`` is a HOLE: the renderer
+    must not triangulate a cell that touches it, or a pole (``z = 1/x``) gets
+    bridged by a fake wall of triangles across the asymptote.
+
+    ``z_range`` is the true (min, max) of the finite samples. ``z_robust`` is
+    the 2nd–98th percentile pair, and it is what the view frames itself with:
+    one spike would otherwise shrink the whole surface to a speck.
+    """
+    if (x_min is None) != (x_max is None):
+        raise SolverError("Provide both x_min and x_max, or neither.")
+    if (y_min is None) != (y_max is None):
+        raise SolverError("Provide both y_min and y_max, or neither.")
+    # Same both-or-neither shape (and the same `assert` for the type checker)
+    # as _generate_implicit — Pyright cannot narrow a tuple element.
+    if x_min is None:
+        x_lo, x_hi = DEFAULT_SURFACE_MIN, DEFAULT_SURFACE_MAX
+    else:
+        assert x_max is not None  # guaranteed by the both-or-neither check
+        if x_min > x_max:
+            raise SolverError("x_min must be <= x_max.")
+        x_lo, x_hi = x_min, x_max
+    if y_min is None:
+        y_lo, y_hi = DEFAULT_SURFACE_MIN, DEFAULT_SURFACE_MAX
+    else:
+        assert y_max is not None
+        if y_min > y_max:
+            raise SolverError("y_min must be <= y_max.")
+        y_lo, y_hi = y_min, y_max
+    if grid is None:
+        n = SURFACE_GRID_DEFAULT
+    else:
+        n = int(grid)
+        if n < 4 or n > SURFACE_GRID_MAX:
+            raise SolverError(f"grid must be between 4 and {SURFACE_GRID_MAX}.")
+
+    sol = _parse_surface(raw)
+    xs = [x_lo + (x_hi - x_lo) * i / n for i in range(n + 1)]
+    ys = [y_lo + (y_hi - y_lo) * j / n for j in range(n + 1)]
+    rows: list[list] = []
+    finite: list[float] = []
+    for y in ys:
+        row: list = []
+        for x in xs:
+            v = _safe_eval2(sol["expr"], x, y)
+            if math.isfinite(v):
+                row.append(round(v, 6))
+                finite.append(v)
+            else:
+                row.append(None)
+        rows.append(row)
+    if not finite:
+        raise SolverError("No real z anywhere in this window.")
+    finite.sort()
+    return {
+        "solution": sol,
+        "x_range": (x_lo, x_hi),
+        "y_range": (y_lo, y_hi),
+        "grid": {"nx": n, "ny": n},
+        "x": [round(v, 6) for v in xs],
+        "y": [round(v, 6) for v in ys],
+        "z": rows,
+        "z_range": (finite[0], finite[-1]),
+        # One spike (z = 1/x, tan) must not decide the framing: the view uses
+        # the 2nd–98th percentile pair, so the common body of the surface
+        # fills the screen and the spike simply runs off it.
+        "z_robust": (_percentile(finite, 0.02), _percentile(finite, 0.98)),
+    }
 
 
 # ============================================================================

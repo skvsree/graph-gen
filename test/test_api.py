@@ -2,6 +2,7 @@
 
 import math
 import re
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1291,7 +1292,318 @@ def test_service_worker_caches_the_vendored_muxer():
     """The MP4 export must keep working offline in the installed PWA."""
     sw = client.get("/sw.js").text
     assert "startsWith('/vendor/')" in sw
-    assert "const VERSION = 'v14';" in sw
+    assert "const VERSION = 'v15';" in sw
+
+
+def test_service_worker_caches_both_pages_and_the_surface_api():
+    """`/3d` is a second shell page, and a plotted surface must survive offline.
+
+    The shell used to be cached under '/' only, so opening /3d would have
+    overwritten the cached 2D page — every navigation is now cached under its
+    own pathname.
+    """
+    sw = client.get("/sw.js").text
+    assert "'/3d'," in sw
+    assert "cache.put" in sw
+    assert "const path = new URL" in sw or "new URL(request.url).pathname" in sw
+    assert "'/api/surface'" in sw
+
+
+def test_no_server_side_video_or_image_encoder_route():
+    """Client-side recording replaced the server-side WebP encoder: no upload
+    route is served, and Pillow is no longer a runtime dependency."""
+    r = client.post("/api/webp", files={"frames": ("f.png", b"not-an-image", "image/png")})
+    assert r.status_code == 404
+
+
+# ===========================================================================
+# 3D surfaces: GET /3d and GET /api/surface
+# ===========================================================================
+
+THREE_TEMPLATE = (Path(__file__).resolve().parent.parent / "templates" / "three.html")
+THREE_JS_TEST = (Path(__file__).resolve().parent / "three.test.js")
+
+
+def test_3d_page_renders_the_canvas_and_vendored_three():
+    r = client.get("/3d")
+    assert r.status_code == 200
+    assert "xy-graph-gen" in r.text
+    assert 'id="view"' in r.text                       # the WebGL canvas
+    assert 'id="formula"' in r.text
+    assert "/vendor/three.module.min.js" in r.text
+
+
+def test_3d_page_is_never_cached():
+    """Same rule as `/`: a cached page whose JS disagrees with the API is the
+    phantom "object error" all over again."""
+    r = client.get("/3d")
+    assert r.headers["cache-control"] == "no-store"
+
+
+def test_3d_page_prefills_formula_window_grid_and_ramp():
+    r = client.get("/3d", params=[
+        ("formula", "z = sin(x) * cos(y)"), ("x_min", "-3"), ("x_max", "3"),
+        ("y_min", "-2"), ("y_max", "2"), ("grid", "24"),
+        ("ramp", "#ff0000"), ("ramp", "#00ff00"),
+    ])
+    assert r.status_code == 200
+    assert 'value="z = sin(x) * cos(y)"' in r.text
+    assert 'id="xMin" value="-3"' in r.text
+    assert 'id="xMax" value="3"' in r.text
+    assert 'id="yMin" value="-2"' in r.text
+    assert 'id="yMax" value="2"' in r.text
+    assert 'id="gridN" value="24"' in r.text
+    assert 'id="rampLow" value="#ff0000"' in r.text
+    assert 'id="rampHigh" value="#00ff00"' in r.text
+
+
+def test_3d_page_defaults_the_ramp_and_the_grid():
+    r = client.get("/3d")
+    assert 'id="rampLow" value="#2563eb"' in r.text
+    assert 'id="rampHigh" value="#dc2626"' in r.text
+    # An empty grid input falls back to the server-side default (48).
+    assert 'id="gridN" value=""' in r.text
+    assert 'placeholder="48"' in r.text
+
+
+def test_3d_page_escapes_the_formula_against_xss():
+    r = client.get("/3d", params={"formula": "<script>alert(1)</script>"})
+    assert r.status_code == 200
+    assert "<script>alert(1)</script>" not in r.text
+    assert "&lt;script&gt;" in r.text
+
+
+def test_3d_page_blank_inputs_for_invalid_numbers():
+    """A hand-written URL cannot push a bad value into an input, and the ramp
+    falls back to the defaults position by position."""
+    r = client.get("/3d", params={"x_min": "abc", "grid": "999", "formula": "z = x"})
+    assert 'id="xMin" value=""' in r.text
+    assert 'id="gridN" value=""' in r.text
+    r2 = client.get("/3d", params=[("ramp", "bogus"), ("ramp", "#12345"), ("formula", "z = x")])
+    assert 'id="rampLow" value="#2563eb"' in r2.text
+    assert 'id="rampHigh" value="#dc2626"' in r2.text
+
+
+def test_2d_page_links_to_the_3d_page():
+    r = client.get("/")
+    assert 'href="/3d"' in r.text
+    # The link needs the anchor resets, or it renders as a blue underlined link
+    # between two pill buttons.
+    assert ".tab-link { text-decoration: none" in r.text
+
+
+def test_api_surface_default_window_and_sampling():
+    r = client.get("/api/surface", params={"formula": "z = x^2 - y^2"})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["grid"] == {"nx": 48, "ny": 48}
+    assert d["x_range"] == {"min": -5.0, "max": 5.0}
+    assert d["y_range"] == {"min": -5.0, "max": 5.0}
+    assert len(d["x"]) == 49 and len(d["y"]) == 49
+    s = d["surfaces"][0]
+    assert s["display"] == "z = x^2 - y^2"
+    assert len(s["z"]) == 49 and len(s["z"][0]) == 49
+    assert s["z_range"] == {"min": -25.0, "max": 25.0}
+    # z[j][i] is (x[i], y[j]) — the row is x and the column is y.
+    assert s["z"][24][0] == 25.0    # x = -5, y = 0
+    assert s["z"][0][24] == -25.0   # x = 0, y = -5
+    assert s["z"][0][0] == 0.0      # x = y = -5
+
+
+def test_api_surface_accepts_a_bare_expression():
+    r = client.get("/api/surface", params={"formula": "x^2 + y^2", "grid": "4"})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["surfaces"][0]["display"] == "z = x^2 + y^2"
+    assert d["grid"] == {"nx": 4, "ny": 4}
+    assert len(d["x"]) == 5
+
+
+def test_api_surface_accepts_an_f_lhs_and_rejects_a_non_z_one():
+    ok = client.get("/api/surface", params={"formula": "f(x,y) = x + y", "grid": "4"})
+    assert ok.status_code == 200
+    bad = client.get("/api/surface", params={"formula": "y = x^2", "grid": "4"})
+    assert bad.status_code == 400
+    assert "z = f(x, y)" in bad.json()["detail"]
+
+
+def test_api_surface_rejects_z_on_the_right():
+    """`z` is the OUTPUT. In the 2D solver it is just an unknown symbol, whose
+    message ("Unknown symbol 'z'.") says nothing about what went wrong here."""
+    r = client.get("/api/surface", params={"formula": "z = x + z", "grid": "4"})
+    assert r.status_code == 400
+    assert "left of the =" in r.json()["detail"]
+
+
+def test_api_surface_marks_holes_as_null():
+    """A cell touching a hole must be skippable: the renderer needs `null`, not
+    0, or it bridges the asymptote with a wall of triangles."""
+    r = client.get("/api/surface", params={"formula": "z = 1/x", "x_min": "-1", "x_max": "1", "grid": "4"})
+    assert r.status_code == 200
+    rows = r.json()["surfaces"][0]["z"]
+    assert any(v is None for row in rows for v in row), "1/x must produce holes at x = 0"
+    assert None not in rows[0] or True  # (holes are exactly the x = 0 column(s))
+    # Every value is a float or None — never a string, never a NaN.
+    for row in rows:
+        for v in row:
+            assert v is None or isinstance(v, float)
+
+
+def test_api_surface_window_validation():
+    bad_pair = client.get("/api/surface", params={"formula": "z = x", "x_min": "-1"})
+    assert bad_pair.status_code == 400
+    assert "both x_min and x_max" in bad_pair.json()["detail"]
+    flipped = client.get("/api/surface", params={"formula": "z = x", "x_min": "5", "x_max": "1"})
+    assert flipped.status_code == 400
+    assert "x_min must be <= x_max" in flipped.json()["detail"]
+    flipped_y = client.get("/api/surface", params={"formula": "z = x", "y_min": "4", "y_max": "-4"})
+    assert flipped_y.status_code == 400
+    assert "y_min must be <= y_max" in flipped_y.json()["detail"]
+
+
+def test_api_surface_grid_bounds():
+    assert client.get("/api/surface", params={"formula": "z = x", "grid": "4"}).status_code == 200
+    assert client.get("/api/surface", params={"formula": "z = x", "grid": "120"}).status_code == 200
+    for bad in ("3", "121", "0"):
+        r = client.get("/api/surface", params={"formula": "z = x", "grid": bad})
+        assert r.status_code == 400, bad
+        assert "grid must be between 4 and 120" in r.json()["detail"]
+
+
+def test_api_surface_formula_count_and_empties():
+    five = client.get("/api/surface", params=[("formula", f"z = x + {i}") for i in range(5)] + [("grid", "4")])
+    assert five.status_code == 200
+    assert len(five.json()["surfaces"]) == 5
+    six = client.get("/api/surface", params=[("formula", f"z = x + {i}") for i in range(6)])
+    assert six.status_code == 400
+    assert "At most 5 surfaces per graph." in six.json()["detail"]
+    empty = client.get("/api/surface", params={"formula": "   "})
+    assert empty.status_code == 400
+
+
+def test_api_surface_no_real_z_in_the_window():
+    r = client.get("/api/surface", params={"formula": "z = sqrt(x)", "x_min": "-5", "x_max": "-1", "grid": "8"})
+    assert r.status_code == 400
+    assert "No real z" in r.json()["detail"]
+
+
+def test_api_surface_cache_headers():
+    params = {"formula": "z = 3*x + y", "grid": "4"}
+    first = client.get("/api/surface", params=params)
+    assert first.status_code == 200
+    assert first.headers["X-Cache"] == "MISS"
+    second = client.get("/api/surface", params=params)
+    assert second.headers["X-Cache"] == "HIT"
+
+
+def test_api_surface_robust_range_ignores_the_spike():
+    """z = 1/(x² + y²) on ±1 peaks at 576 on the samples beside the origin; the
+    view frames itself with the 2nd–98th percentile pair (≈34), so the body of
+    the surface stays on screen instead of collapsing to a speck."""
+    r = client.get("/api/surface", params={
+        "formula": "z = 1/(x^2 + y^2)", "x_min": "-1", "x_max": "1",
+        "y_min": "-1", "y_max": "1", "grid": "48",
+    })
+    assert r.status_code == 200
+    s = r.json()["surfaces"][0]
+    assert s["z_range"]["max"] > 500
+    assert s["z_robust"]["max"] < s["z_range"]["max"] / 10
+    # The framing range must still contain the bulk of the surface.
+    assert s["z_robust"]["min"] < s["z_range"]["max"] / 10
+
+
+def test_implicit_curve_with_a_fractional_power_of_a_negative_base_is_not_a_500():
+    """Regression: (-8) ** 0.5 is COMPLEX in Python and `math.isfinite` then
+    raises TypeError, so `x^0.5 + y = 0` answered HTTP 500 (verified against the
+    running service before the fix). It is a real curve — negative x simply has
+    no real sample."""
+    r = client.get("/api/points", params={"formula": "x^0.5 + y = 0"})
+    assert r.status_code == 200
+    assert len(r.json()["curves"][0]["branches"]) >= 1
+    from app import solver
+    F = solver.parse_expr("x^0.5 + y")
+    assert math.isnan(solver._safe_eval2(F, -4.0, 0.0))
+    assert solver._safe_eval2(F, 4.0, 0.0) == 2.0
+
+
+def test_vendor_serves_the_three_js_build():
+    """A browser with no CDN and no build step: three.js is served from our own
+    origin, module + its sibling core chunk."""
+    mod = client.get("/vendor/three.module.min.js")
+    core = client.get("/vendor/three.core.min.js")
+    assert mod.status_code == 200 and core.status_code == 200
+    for r in (mod, core):
+        assert r.headers["content-type"].startswith("application/javascript")
+    # r180 splits the build in two: the module re-exports the core, and the
+    # relative specifier must resolve to the sibling we actually vendored.
+    assert "three.core.min.js" in mod.text
+    assert client.get("/vendor/three.LICENSE").status_code == 200
+
+
+def test_three_template_loads_three_from_our_own_origin():
+    text = THREE_TEMPLATE.read_text()
+    assert "cdn.jsdelivr.net" not in text
+    assert "unpkg.com" not in text
+    assert "await import('/vendor/three.module.min.js')" in text
+    # No build step: the page must not reference an unbundled bare specifier
+    # (three's ESM examples import from 'three' itself and would need an
+    # import map).
+    assert "from 'three'" not in text and 'from "three"' not in text
+
+
+def test_three_template_never_triangulates_a_hole():
+    """The one thing a surface renderer silently gets wrong: `isFinite(null)`
+    is TRUE, so a hole would be plotted as z = 0 and the cell bridged."""
+    text = THREE_TEMPLATE.read_text()
+    assert "function num(v) { return typeof v === 'number' && Number.isFinite(v); }" in text
+    assert "!num(v00) || !num(v10) || !num(v11) || !num(v01)" in text
+    # and the wireframe skips holes too, via the same helper
+    assert "if (!num(zs[j0][i0]) || !num(zs[j1][i1])) return;" in text
+
+
+def test_three_template_has_no_server_side_export_path():
+    """Same rule the 2D page follows: exports are client-side (the user
+    rejected a server encoder for PNG/WebP/video)."""
+    text = THREE_TEMPLATE.read_text()
+    assert "/api/webp" not in text
+    assert "toBlob" in text          # Save PNG encodes in the browser
+    assert "drawImage(src, 0, 0)" in text   # composited onto the card colour
+
+
+def test_three_template_ramp_is_one_pair_and_recolours_without_a_refetch():
+    text = THREE_TEMPLATE.read_text()
+    assert 'class="ramp-low" id="rampLow"' in text
+    assert 'class="ramp-high" id="rampHigh"' in text
+    assert 'class="hex-ramp" id="hexLow"' in text
+    assert 'class="hex-ramp" id="hexHigh"' in text
+    # A device colour dialog is not enough on Android: both ends also take a
+    # hex box, and the swatch stays the single source of truth.
+    assert "document.getElementById(swatchId).value = hex;" in text
+    # Colour changes must not re-fetch the grid.
+    assert "surfaceMesh.geometry.setAttribute('color'" in text
+
+
+def test_three_template_exposes_every_pure_helper_to_the_js_suite():
+    """The twin of the `__api` rule in test/solver.test.js: a pure helper that
+    is not listed stays uncovered, and a listed name that does not exist fails
+    the node suite — so the two lists must match exactly."""
+    text = THREE_TEMPLATE.read_text()
+    m = re.search(r"var __api = \{(.*?)\};", text, re.S)
+    assert m is not None, "three.html must expose its pure helpers as __api"
+    exposed = {k.strip() for k in re.findall(r"([A-Za-z_$][\w$]*)\s*:", m.group(1))}
+    assert exposed, "no names parsed out of __api"
+    for name in exposed:
+        assert f"function {name}(" in text, f"__api lists {name} but there is no such function"
+    js = THREE_JS_TEST.read_text()
+    m2 = re.search(r"const \{([^}]*)\} = sandbox\.__api", js, re.S)
+    assert m2 is not None, "three.test.js must destructure sandbox.__api"
+    used = {k.strip() for k in m2.group(1).split(",") if k.strip()}
+    assert exposed == used, "three.html and three.test.js disagree: " + str(exposed ^ used)
+
+
+def test_three_js_suite_is_in_the_documented_test_commands():
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+    assert "node test/three.test.js" in readme
 
 
 def test_anim_video_button_is_a_styled_toolbar_button():

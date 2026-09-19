@@ -122,6 +122,9 @@ FastAPI + Jinja2 + vanilla JS. The page plots from the server-side solver
 (`/api/points`) and falls back to a built-in client-side solver if the API is
 unreachable (e.g. opened as a plain file).
 
+There is a second page for **3D surfaces** — `z = f(x, y)`, drawn with WebGL —
+described under [3D surfaces](#3d-surfaces-3d).
+
 It is also a **PWA**: installable from the browser (Add to Home screen / Install
 app), it opens in its own window and keeps working **offline** — see
 [Install as an app](#install-as-an-app-pwa).
@@ -136,6 +139,47 @@ python3 -m venv .venv
 ```
 
 Open http://127.0.0.1:8123
+
+## 3D surfaces (`/3d`)
+
+The **3D** tab (or `https://xy.selviz.in/3d`) plots a surface `z = f(x, y)` in
+WebGL: **drag to rotate, scroll or pinch to zoom, right-drag (or two fingers) to
+pan, double-click to reset**. The surface is **coloured by height** — it fades
+from the low-z colour into the high-z colour, the same start→end idea as a 2D
+line's gradient — and its height, x and y ranges, sampling density, wire lines,
+grid and axes are all controllable from the page. `Wire`, `Grid` and `Axes` are
+independent toggles, and `Save PNG` (encoded in the browser, like every other
+export here) or `Copy link` gets the picture or the exact view out.
+
+The **solving happens on the server** (`GET /api/surface`, the same two-variable
+evaluator the implicit curves use), the **rendering happens in the browser**:
+the API returns a grid of numbers and three.js draws it. Nothing is rendered or
+uploaded server-side.
+
+[three.js](https://threejs.org) (MIT, r180) is **vendored** at
+`static/vendor/three.module.min.js` + `three.core.min.js` and served from our
+own origin by `/vendor/{name}` — no CDN, no build step, no import map, and the
+service worker caches it on first use, so a 3D plot keeps working offline (a
+surface you already plotted replots from the cached `/api/surface` response; a
+new one needs a connection, and the page says so instead of showing a blank
+card).
+
+Two details the renderer has to get right:
+
+* **A sample with no real z is a hole, not a zero.** `isFinite(null)` is `true`
+  in JavaScript, so the obvious check would plot a pole as `z = 0` and bridge the
+  asymptote with a wall of triangles. `z = 1/x`, `z = sqrt(x*y)` and friends come
+  back as `null` and every cell touching one is dropped (the page reports how
+  many).
+* **The view is framed by a robust z range** (2nd–98th percentile of the finite
+  samples), so one spike — `z = 1/(x² + y²)` peaks at 576 on ±1 — cannot shrink
+  the whole surface to a speck. The status line still reports the true min/max.
+
+The page shares its theme, its colour-picker idioms (a device swatch **plus** a
+hex box, because Android's dialog only offers a small fixed palette) and its
+string-thin, no-store URL-state conventions with the 2D page. 3D is a separate
+route rather than a third `mode=` value because its response shape (a z-grid)
+has nothing in common with the 2D branch-of-points schema.
 
 ## Install as an app (PWA)
 
@@ -193,6 +237,8 @@ writing to `textContent`, which used to blank the button's SVG.
 |---|---|
 | `GET /` | Renders the graph page. The formula is a query param: `/?formula=x%20%2B%20y%20%3D%203`. The page keeps the URL in sync (`?formula=…`) as you plot, so links are shareable. `?mode=polar` opens the polar tab (default `cartesian`). The page footer shows a **hit counter** (`Hits: N` — page renders since the process started, refreshed from `/api/hits` every 30s). |
 | `GET /api/points?mode=…&formula=…&formula=…&x_min=…&x_max=…&x_step=…` | Solves one or more formulas (max 5, repeated `formula=` params) and returns the curves as JSON: `{"mode", "formulas", "x_range": {"min","max"}, "step", "curves": [{"formula", "display", "kind", "branches": [{"label","points": [{"x","y"}, …]}, …]}, …]}`. `mode` is `cartesian` (default) or `polar`. Linear formulas return one branch, quadratic-in-`y` two ("+", "−"), function formulas one per contiguous segment, implicit curves one per contour polyline. Inequality curves additionally carry `"inequality": {"op", "side"}` (side ∈ above/below/between/outside). Polar points also carry `theta` and `r` (`{"x","y","theta","r"}`) so the table can show θ/r. `x_min`/`x_max`/`x_step` (fractions allowed; step must be > 0 and ≤ 1000; both range bounds required together) override the default range and sampling — e.g. `x_step=0.1` for a smooth trig curve. In polar mode they bound θ; for implicit curves they size the sampling window. Responses are cached in-process for 60s (`X-Cache: HIT/MISS` header). Invalid formulas (or no real points) return `400` with a human-readable `detail`. |
+| `GET /3d?formula=…&x_min=…&x_max=…&y_min=…&y_max=…&grid=…&ramp=…&ramp=…` | Renders the 3D surface page (three.js). Pre-fills the formula, the sampling window, the cells per axis and the height ramp (low-z colour, then high-z colour); every value is validated and kept as a string so it round-trips through the URL. `Cache-Control: no-store`, like `/`. |
+| `GET /api/surface?formula=…&x_min=…&x_max=…&y_min=…&y_max=…&grid=…` | Samples `z = f(x, y)` (max 5 formulas) and returns the z-grid: `{"formulas", "x_range", "y_range", "grid": {"nx","ny"}, "x": […], "y": […], "surfaces": [{"formula", "display", "z": [[…]], "z_range", "z_robust"}]}`. `z[j][i]` is the value at `(x[i], y[j])`; **`null` marks a hole** (undefined/non-finite) that the renderer must not triangulate. `grid` is 4–120 cells per axis (default 48), the default window is ±5 on both axes. `z_range` is the true min/max of the finite samples and `z_robust` the 2nd–98th percentile pair the view frames itself with. `formula` may be `z = …`, `f(x,y) = …` or a bare expression; `z` may only appear on the left. Cached in-process for 60s (`X-Cache: HIT/MISS`); invalid input returns `400`. |
 | `GET /api/hits` | Page hit count since process start: `{"hits": N}`. |
 | `GET /manifest.webmanifest` | Web app manifest (`application/manifest+json`, `Cache-Control: no-cache`) — what makes the page installable. |
 | `GET /sw.js` | The service worker, served from the origin root so its scope is `/` (`Service-Worker-Allowed: /`, `Cache-Control: no-cache`). |
@@ -274,14 +320,18 @@ Any linear equation, and simple polynomials in `x` (linear in `y`):
 
 ```
 app/
-  main.py        FastAPI app (/, /api/points, /api/hits, /metrics, /health,
-                 + /manifest.webmanifest, /sw.js, /icons/{name})
-  solver.py      server-side equation solver (pure Python, no deps)
+  main.py        FastAPI app (/, /3d, /api/points, /api/surface, /api/hits,
+                 /metrics, /health, + /manifest.webmanifest, /sw.js, /icons/{name})
+  solver.py      server-side equation solver (pure Python, no deps) — 2D curves
+                 AND the 3D surface grid (eval_ast2)
 templates/
-  index.html     the graph page (client solver kept as offline fallback)
+  index.html     the 2D graph page (client solver kept as offline fallback)
+  three.html     the 3D surface page (three.js, pure helpers exposed as __api)
 static/
   manifest.webmanifest  PWA install metadata
   sw.js                 service worker (shell precache, offline /api/points)
+  vendor/               three.module.min.js + three.core.min.js (three.js r180,
+                        MIT) and mp4-muxer.js — cached on demand, never built
   icons/                launcher / maskable / apple-touch PNGs
   screenshots/          install-sheet previews (wide + narrow)
 scripts/
@@ -289,20 +339,24 @@ scripts/
   make_screenshots.py   regenerates static/screenshots/ (needs Playwright)
 test/
   test_solver.py pytest unit tests for the solver
-  test_api.py    pytest API tests (TestClient)
+  test_api.py    pytest API tests (TestClient) + template guards
   solver.test.js node unit tests for the client-side fallback solver
+  three.test.js  node unit tests for the 3D page's pure helpers
 pyproject.toml   deps + pytest config
 ```
 
 ## Tests
 
 ```bash
-.venv/bin/pytest -q          # solver + API tests
-node test/solver.test.js     # client-side fallback solver
+.venv/bin/pytest -q          # solver + API tests, /3d and /api/surface included
+node test/solver.test.js     # client-side fallback solver, 2D page
+node test/three.test.js      # 3D page's pure helpers (geometry, ramp, camera)
 ```
 
 The Python solver and the client-side JS solver mirror each other; keep them
-in agreement when changing either.
+in agreement when changing either. The 3D page has **no** JS twin: it has no
+client-side solver, so a surface is always solved by `/api/surface` (and the
+page says so when it is offline).
 
 ## Production (this host)
 
@@ -342,6 +396,8 @@ P3 = bigger / probably not worth it.
 - [x] Per-row line thickness (`?w=`, 0.5–12px) and line styles (`?style=`: solid, dashed, dotted, dash-dot, long dash) with width-scaled dash patterns
 - [x] Per-row **pens** (`?pen=`): Technical, Pencil (deterministic grain), Marker, Calligraphy (45° chisel nib, width varies with direction) and Highlighter — composing with thickness, style, opacity and gradients
 - [x] Multiple formulas on one graph with legend (batch `/api/points` or comma-separated input)
+- [x] **3D surfaces** (`/3d`, `z = f(x, y)` drawn with vendored three.js — rotate/zoom/pan, height-ramp colours, wire/grid/axis toggles, PNG + shareable URL, server-solved `/api/surface` grid)
+- [ ] 3D follow-ups: more than one surface on one plot (the API is already list-shaped), parametric curves `(x(t), y(t), z(t))` and implicit isosurfaces `F(x,y,z) = 0`; an offline client-side solver for the 3D page (it currently needs a connection for a new surface)
 - [x] Polar mode in a second tab (`?mode=polar&formula=r+%3D+2%CE%B8`; `r = f(θ)` with `θ`/`theta` for the angle, `x_min`/`x_max`/`x_step` bound θ; the points table shows θ and r in polar mode)
 - [x] History & samples in collapsible accordions (closed by default; open/closed state remembered per tab — `xygh:open:history:cartesian` / `xygh:open:samples:polar`, etc.)
 - [ ] Derivative + tangent lines (symbolic for polynomials — cheap: differentiate the coefficient map)

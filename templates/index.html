@@ -179,6 +179,10 @@
   }
   .tab:hover { background: var(--hover); }
   .tab.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  /* The 3D tab is a LINK (it is a different page), so it needs the anchor
+     resets a <button> gets for free — without them it renders as a blue
+     underlined link sitting next to two pill buttons. */
+  .tab-link { text-decoration: none; display: inline-block; }
   .mode-hint { color: var(--muted); font-size: 13px; margin: -8px 0 14px; min-height: 16px; }
   .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 0 0 12px; align-items: center; }
   .legend-item { display: inline-flex; gap: 7px; align-items: center; font-size: 13.5px; color: var(--fg-soft); }
@@ -309,6 +313,7 @@
   <div class="tabs" id="tabs">
     <button type="button" class="tab active" id="tabCartesian" data-mode="cartesian">Cartesian</button>
     <button type="button" class="tab" id="tabPolar" data-mode="polar">Polar</button>
+    <a class="tab tab-link" href="/3d" title="Plot a 3D surface z = f(x, y)">3D</a>
   </div>
   <p class="mode-hint" id="modeHint"></p>
 

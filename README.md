@@ -142,19 +142,32 @@ Open http://127.0.0.1:8123
 
 ## 3D surfaces (`/3d`)
 
-The **3D** tab (or `https://xy.selviz.in/3d`) plots a surface `z = f(x, y)` in
-WebGL: **drag to rotate, scroll or pinch to zoom, right-drag (or two fingers) to
-pan, double-click to reset**. The surface is **coloured by height** — it fades
-from the low-z colour into the high-z colour, the same start→end idea as a 2D
-line's gradient — and its height, x and y ranges, sampling density, wire lines,
-grid and axes are all controllable from the page. `Wire`, `Grid` and `Axes` are
-independent toggles, and `Save PNG` (encoded in the browser, like every other
-export here) or `Copy link` gets the picture or the exact view out.
+The **3D** tab (or `https://xy.selviz.in/3d`) plots **one or more surfaces**
+`z = f(x, y)` in WebGL: **drag to rotate, scroll or pinch to zoom, right-drag (or
+two fingers) to pan, double-click to reset**. `＋ Surface` adds a row (max 5),
+each row has its own **height ramp** (the colour at that surface's lowest z →
+the colour at its highest z), its own **opacity** (`%`), and duplicate/remove
+icons; the legend under the toolbar shows each surface's ramp, its display form
+and its z span. Every surface is sampled over the **same** (x, y) window and
+grid, so one set of x/y/grid inputs drives them all, and the view frames the
+*union* of their z ranges.
+
+Lower a row's `%` to see a surface inside another one (a plane through a bowl).
+A **see-through** surface does not write depth — otherwise it would hide
+whatever is behind it — while an opaque one does, so surfaces occlude each
+other properly.
+
+`Wire`, `Grid` and `Axes` are independent toggles, and `Save PNG` (encoded in the
+browser, like every other export here) or `Copy link` gets the picture or the
+exact view out. A share link carries the non-default ramps and opacities as
+full aligned lists (`ramp_low=`/`ramp_high=`/`op=`), so position always means
+row; the single-surface `?ramp=` pair from the first release is still honoured
+for row 1.
 
 The **solving happens on the server** (`GET /api/surface`, the same two-variable
 evaluator the implicit curves use), the **rendering happens in the browser**:
-the API returns a grid of numbers and three.js draws it. Nothing is rendered or
-uploaded server-side.
+the API returns a grid of numbers per formula and three.js draws them. Nothing is
+rendered or uploaded server-side.
 
 [three.js](https://threejs.org) (MIT, r180) is **vendored** at
 `static/vendor/three.module.min.js` + `three.core.min.js` and served from our
@@ -237,7 +250,7 @@ writing to `textContent`, which used to blank the button's SVG.
 |---|---|
 | `GET /` | Renders the graph page. The formula is a query param: `/?formula=x%20%2B%20y%20%3D%203`. The page keeps the URL in sync (`?formula=…`) as you plot, so links are shareable. `?mode=polar` opens the polar tab (default `cartesian`). The page footer shows a **hit counter** (`Hits: N` — page renders since the process started, refreshed from `/api/hits` every 30s). |
 | `GET /api/points?mode=…&formula=…&formula=…&x_min=…&x_max=…&x_step=…` | Solves one or more formulas (max 5, repeated `formula=` params) and returns the curves as JSON: `{"mode", "formulas", "x_range": {"min","max"}, "step", "curves": [{"formula", "display", "kind", "branches": [{"label","points": [{"x","y"}, …]}, …]}, …]}`. `mode` is `cartesian` (default) or `polar`. Linear formulas return one branch, quadratic-in-`y` two ("+", "−"), function formulas one per contiguous segment, implicit curves one per contour polyline. Inequality curves additionally carry `"inequality": {"op", "side"}` (side ∈ above/below/between/outside). Polar points also carry `theta` and `r` (`{"x","y","theta","r"}`) so the table can show θ/r. `x_min`/`x_max`/`x_step` (fractions allowed; step must be > 0 and ≤ 1000; both range bounds required together) override the default range and sampling — e.g. `x_step=0.1` for a smooth trig curve. In polar mode they bound θ; for implicit curves they size the sampling window. Responses are cached in-process for 60s (`X-Cache: HIT/MISS` header). Invalid formulas (or no real points) return `400` with a human-readable `detail`. |
-| `GET /3d?formula=…&x_min=…&x_max=…&y_min=…&y_max=…&grid=…&ramp=…&ramp=…` | Renders the 3D surface page (three.js). Pre-fills the formula, the sampling window, the cells per axis and the height ramp (low-z colour, then high-z colour); every value is validated and kept as a string so it round-trips through the URL. `Cache-Control: no-store`, like `/`. |
+| `GET /3d?formula=…&ramp_low=…&ramp_high=…&op=…&x_min=…&x_max=…&y_min=…&y_max=…&grid=…` | Renders the 3D surface page (three.js), one row per repeated `formula=` (max 5). Per-row `ramp_low=`/`ramp_high=` set that row's height ramp and `op=` its opacity (percent, default 100); `?ramp=` is the LEGACY single-surface pair, honoured for the first row. `x_min`/`x_max`/`y_min`/`y_max` set the shared sampling window and `grid` the cells per axis. Every value is validated (an invalid ramp falls back to that ROW's default, never another row's colour) and kept as a string so it round-trips through the URL. `Cache-Control: no-store`, like `/`. |
 | `GET /api/surface?formula=…&x_min=…&x_max=…&y_min=…&y_max=…&grid=…` | Samples `z = f(x, y)` (max 5 formulas) and returns the z-grid: `{"formulas", "x_range", "y_range", "grid": {"nx","ny"}, "x": […], "y": […], "surfaces": [{"formula", "display", "z": [[…]], "z_range", "z_robust"}]}`. `z[j][i]` is the value at `(x[i], y[j])`; **`null` marks a hole** (undefined/non-finite) that the renderer must not triangulate. `grid` is 4–120 cells per axis (default 48), the default window is ±5 on both axes. `z_range` is the true min/max of the finite samples and `z_robust` the 2nd–98th percentile pair the view frames itself with. `formula` may be `z = …`, `f(x,y) = …` or a bare expression; `z` may only appear on the left. Cached in-process for 60s (`X-Cache: HIT/MISS`); invalid input returns `400`. |
 | `GET /api/hits` | Page hit count since process start: `{"hits": N}`. |
 | `GET /manifest.webmanifest` | Web app manifest (`application/manifest+json`, `Cache-Control: no-cache`) — what makes the page installable. |
@@ -397,7 +410,8 @@ P3 = bigger / probably not worth it.
 - [x] Per-row **pens** (`?pen=`): Technical, Pencil (deterministic grain), Marker, Calligraphy (45° chisel nib, width varies with direction) and Highlighter — composing with thickness, style, opacity and gradients
 - [x] Multiple formulas on one graph with legend (batch `/api/points` or comma-separated input)
 - [x] **3D surfaces** (`/3d`, `z = f(x, y)` drawn with vendored three.js — rotate/zoom/pan, height-ramp colours, wire/grid/axis toggles, PNG + shareable URL, server-solved `/api/surface` grid)
-- [ ] 3D follow-ups: more than one surface on one plot (the API is already list-shaped), parametric curves `(x(t), y(t), z(t))` and implicit isosurfaces `F(x,y,z) = 0`; an offline client-side solver for the 3D page (it currently needs a connection for a new surface)
+- [x] **Multiple surfaces** on one 3D plot (up to 5 rows, each with its own ramp and opacity, duplicate/remove, a legend, and a view framed on the union of the z ranges)
+- [ ] 3D follow-ups: parametric curves `(x(t), y(t), z(t))` and implicit isosurfaces `F(x,y,z) = 0` (marching cubes); an offline client-side solver for the 3D page (it currently needs a connection for a new surface); an optional z-axis scale, since a surface whose z range dwarfs its window (the default saddle spans 50 in z against 10 in x/y) is drawn to true scale and reads as a tall narrow funnel
 - [x] Polar mode in a second tab (`?mode=polar&formula=r+%3D+2%CE%B8`; `r = f(θ)` with `θ`/`theta` for the angle, `x_min`/`x_max`/`x_step` bound θ; the points table shows θ and r in polar mode)
 - [x] History & samples in collapsible accordions (closed by default; open/closed state remembered per tab — `xygh:open:history:cartesian` / `xygh:open:samples:polar`, etc.)
 - [ ] Derivative + tangent lines (symbolic for polynomials — cheap: differentiate the coefficient map)

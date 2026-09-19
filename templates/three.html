@@ -91,6 +91,40 @@
     text-align: center; text-transform: lowercase;
   }
   .ramp-arrow { color: var(--muted); font-size: 13px; line-height: 1; padding: 0 1px; }
+  /* One row per surface: formula, its own height ramp, its opacity, and the
+     duplicate/remove buttons. The rows are a column so a wrap cannot strand a
+     control on its own line the way the 2D formula row can. */
+  #surfaceRows { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+  .surface-row { display: flex; gap: 8px; align-items: center; width: 100%; flex-wrap: wrap; }
+  /* Inline SVG icons (same `.ico`/`.s` convention as the 2D page: stroke =
+     currentColor, so a button's colour drives its icon). */
+  .ico { display: block; width: 18px; height: 18px; }
+  .ico.sm { width: 15px; height: 15px; }
+  .ico .s { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  /* Per-row icon buttons (duplicate / remove) — quiet until hovered, and
+     SCOPED as `.form .<class>` so no generic form-button rule can repaint them
+     (that rule turned three different icons blue on the 2D page). */
+  .form .row-del, .form .row-dup {
+    border: none; background: none; cursor: pointer; line-height: 1;
+    color: var(--muted); padding: 4px 6px; border-radius: 6px; flex: none;
+  }
+  .form .row-del:hover { color: var(--error-fg); background: var(--hover); }
+  .form .row-dup:hover { color: var(--fg); background: var(--hover); }
+  .form .add-btn {
+    padding: 8px 14px; font-size: 13.5px; font-weight: 600; font-family: inherit;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--card);
+    color: var(--fg-soft); cursor: pointer;
+  }
+  .form .add-btn:hover { background: var(--hover); border-color: #94a3b8; }
+  .form .add-btn[hidden] { display: none; }
+  /* Legend: one chip per surface, its swatch showing that row's whole ramp. */
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 10px 0 0; align-items: center; }
+  .legend-item { display: inline-flex; gap: 7px; align-items: center; font-size: 13.5px; color: var(--fg-soft); }
+  .legend-dot {
+    width: 16px; height: 16px; border-radius: 4px; flex: none;
+    border: 1px solid var(--border);
+  }
+  .legend-meta { color: var(--muted); font-size: 12.5px; }
   .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
   .samples { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
   .chip {
@@ -139,7 +173,7 @@
 <div class="wrap">
   <header>
     <h1>xy-graph-gen <span class="lbl">3D</span></h1>
-    <p>Enter a surface as <code>z = f(x, y)</code> — it is sampled over an (x, y) window and drawn with WebGL. Drag to rotate, scroll or pinch to zoom, right-drag (or two fingers) to pan, double-click to reset. Functions: <code>sin cos tan asin acos atan atan2(y,x) sinh cosh tanh log ln log10 log2 sqrt cbrt exp abs floor ceil round sign</code> (+ <code>e</code>, <code>pi</code>). Colour fades from the low-z colour to the high-z colour. <a href="/">← 2D grapher</a></p>
+    <p>Enter one or more surfaces as <code>z = f(x, y)</code> — each is sampled over the same (x, y) window and drawn with WebGL. Drag to rotate, scroll or pinch to zoom, right-drag (or two fingers) to pan, double-click to reset. Functions: <code>sin cos tan asin acos atan atan2(y,x) sinh cosh tanh log ln log10 log2 sqrt cbrt exp abs floor ceil round sign</code> (+ <code>e</code>, <code>pi</code>). Each row colours its own surface from its low-z colour to its high-z colour; lower a row's <code>%</code> to see a surface inside another one. <a href="/">← 2D grapher</a></p>
   </header>
 
   <nav class="tabs">
@@ -148,14 +182,32 @@
   </nav>
 
   <form class="form" id="form">
-    <input type="text" class="formula-input" id="formula" value="{{ formulas[0] }}" spellcheck="false" autocomplete="off" placeholder="e.g. z = sin(x) * cos(y)" aria-label="Surface formula">
-    <span class="ramp" title="Height ramp — the colour at the lowest z, then the colour at the highest z">
-      <input type="color" class="ramp-low" id="rampLow" value="{{ ramp[0] }}" title="Colour at the lowest z (device picker; the box beside it takes any #rgb/#rrggbb)">
-      <input type="text" class="hex-ramp" id="hexLow" value="{{ ramp[0] }}" spellcheck="false" autocomplete="off" maxlength="7" title="Colour at the lowest z — #rgb or #rrggbb, press Enter to apply" aria-label="Low-z colour as hex">
-      <span class="ramp-arrow" aria-hidden="true">&#8594;</span>
-      <input type="color" class="ramp-high" id="rampHigh" value="{{ ramp[1] }}" title="Colour at the highest z (device picker; the box beside it takes any #rgb/#rrggbb)">
-      <input type="text" class="hex-ramp" id="hexHigh" value="{{ ramp[1] }}" spellcheck="false" autocomplete="off" maxlength="7" title="Colour at the highest z — #rgb or #rrggbb, press Enter to apply" aria-label="High-z colour as hex">
-    </span>
+    <div id="surfaceRows">
+      {% for f in formulas %}
+      <div class="surface-row">
+        <input type="text" class="formula-input"{% if loop.first %} id="formula"{% endif %} value="{{ f }}" spellcheck="false" autocomplete="off" placeholder="e.g. z = sin(x) * cos(y)" aria-label="Surface formula">
+        <span class="ramp" title="This surface's height ramp — the colour at its lowest z, then at its highest z">
+          <input type="color" class="ramp-low"{% if loop.first %} id="rampLow"{% endif %} value="{{ ramps[loop.index0][0] }}" title="Colour at this surface's lowest z (device picker; the box beside it takes #rgb/#rrggbb)" aria-label="Low-z colour">
+          <input type="text" class="hex-ramp hex-low"{% if loop.first %} id="hexLow"{% endif %} value="{{ ramps[loop.index0][0] }}" spellcheck="false" autocomplete="off" maxlength="7" title="Colour at the lowest z — #rgb or #rrggbb, press Enter to apply" aria-label="Low-z colour as hex">
+          <span class="ramp-arrow" aria-hidden="true">&#8594;</span>
+          <input type="color" class="ramp-high"{% if loop.first %} id="rampHigh"{% endif %} value="{{ ramps[loop.index0][1] }}" title="Colour at this surface's highest z (device picker; the box beside it takes #rgb/#rrggbb)" aria-label="High-z colour">
+          <input type="text" class="hex-ramp hex-high"{% if loop.first %} id="hexHigh"{% endif %} value="{{ ramps[loop.index0][1] }}" spellcheck="false" autocomplete="off" maxlength="7" title="Colour at the highest z — #rgb or #rrggbb, press Enter to apply" aria-label="High-z colour as hex">
+        </span>
+        <span class="ctr op-ctr" title="This surface's opacity in percent (0–100, default 100) — lower it to see a surface inside another one">
+          <span class="ctr-axis">
+            <label class="ctr-lbl" for="op{{ loop.index0 }}">%</label>
+            <input type="number" class="opacity-pick" id="op{{ loop.index0 }}" value="{{ opacities[loop.index0] }}" placeholder="100" min="0" max="100" step="5" aria-label="Surface opacity in percent">
+          </span>
+        </span>
+        <button type="button" class="row-dup" title="Duplicate this surface as a new row below — same ramp and opacity" aria-label="Duplicate this surface"{% if formulas|length >= max_rows %} hidden{% endif %}>
+          <svg class="ico sm" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="s" d="M11.9 4.2H4.6A1.4 1.4 0 0 0 3.2 5.6v7.3"/><rect class="s" x="6.1" y="6.1" width="8.7" height="8.7" rx="1.7"/></svg>
+        </button>
+        <button type="button" class="row-del" title="Remove this surface" aria-label="Remove this surface"{% if formulas|length == 1 %} hidden{% endif %}>
+          <svg class="ico sm" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="s" d="M4.8 4.8 13.2 13.2M13.2 4.8 4.8 13.2"/></svg>
+        </button>
+      </div>
+      {% endfor %}
+    </div>
     <div class="range-row">
       <span class="range-label">x:</span>
       <input type="number" id="xMin" value="{{ x_min }}" placeholder="-5" step="any" aria-label="x minimum">
@@ -166,8 +218,11 @@
       <span class="range-label" title="Samples per axis — more is smoother and heavier ({{ grid_min }}–{{ grid_max }})">grid:</span>
       <input type="number" id="gridN" value="{{ grid }}" placeholder="{{ default_grid }}" min="{{ grid_min }}" max="{{ grid_max }}" step="4" aria-label="Grid cells per axis">
       <button type="submit" class="plot-btn" id="plotBtn">Plot</button>
+      <button type="button" class="add-btn" id="addRowBtn" title="Add another surface (max {{ max_rows }})"{% if formulas|length >= max_rows %} hidden{% endif %}>&#65291; Surface</button>
     </div>
   </form>
+
+  <div class="legend" id="legend" aria-live="polite"></div>
 
   <div class="samples" id="samples">
     <button type="button" class="chip">z = x^2 - y^2</button>
@@ -415,8 +470,22 @@ function errorText(err) {
 
 // --- page state -------------------------------------------------------------
 
-const DMIN = -5, DMAX = 5;          // the server's default window (solver.py)
 const CAMERA_FOV = 45;              // degrees — shared by the camera and fitView
+const MAX_ROWS = 5;                 // the API's per-graph ceiling — MUST mirror
+                                    // MAX_FORMULAS in app/main.py
+                                    // (test_template_max_rows_matches_server)
+// Default ramp per ROW (low z -> high z), so a second surface is a different
+// colour instead of a carbon copy of the first. MUST mirror `SURFACE_RAMPS` in
+// app/main.py — test_template_surface_ramps_match_server keeps them in lockstep.
+const SURFACE_RAMPS = [
+  ['#2563eb', '#dc2626'],   // blue -> red
+  ['#059669', '#facc15'],   // green -> amber
+  ['#7c3aed', '#ec4899'],   // violet -> pink
+  ['#0891b2', '#f97316'],   // cyan -> orange
+  ['#475569', '#cbd5e1'],   // slate -> light
+];
+/** The default ramp pair for row `i` (cycles past the end of the list). */
+function rampFor(i) { return SURFACE_RAMPS[i % SURFACE_RAMPS.length].slice(); }
 // Default orbit: a 3/4 view from the +x/+y quadrant, high enough that a tall
 // surface (a saddle spans 50 in z against a 10-wide window) still reads as a
 // surface rather than a wall. Shared by the initial view AND Reset view.
@@ -425,10 +494,55 @@ const X = 0, Y = 1, Z = 2;          // maths axis indices, for readability
 let payload = null;                 // the last /api/surface response
 let scene = null, camera = null, renderer = null, group = null;
 let lights = [];
-let surfaceMesh = null, wireLines = null;
+let meshes = [], wireLines = [];    // one of each per surface, in row order
+let lastQuery = '';                 // dedupes the plot of one edit (change + submit)
+let lastFailed = '', lastFailedMsg = '';  // ...and of one formula that cannot solve
+let lastFrame = { min: -1, max: 1 }; // the z window the view is framed on
+let activeRowEl = null;             // where the sample chips write
 let view = { azimuth: DEFAULT_AZIMUTH, polar: DEFAULT_POLAR, distance: 20, target: [0, 0, 0], span: 10 };
 let wireOn = false, gridOn = true, axesOn = true;
 let rafPending = false;
+
+// --- the rows ---------------------------------------------------------------
+// One row per surface. The rows are the source of truth for formula, ramp and
+// opacity; the API only ever sees formulas (ramp/opacity are presentation).
+
+function rows() {
+  return Array.prototype.slice.call(document.querySelectorAll('#surfaceRows .surface-row'));
+}
+function rowValue(row) { return row.querySelector('.formula-input').value.trim(); }
+/** Rows that actually carry a formula — the ones the API solves, in order.
+ *  An empty row (just added, not typed into yet) is skipped rather than
+ *  turning the whole plot into an error. */
+function filledRows() {
+  return rows().filter(function (r) { return rowValue(r) !== ''; });
+}
+function rowRamp(row) {
+  return [row.querySelector('.ramp-low').value, row.querySelector('.ramp-high').value];
+}
+function rowOpacity(row) {
+  const v = parseInt(row.querySelector('.opacity-pick').value, 10);
+  return Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : 100;
+}
+
+/** The z window the whole scene frames itself on: the UNION of every surface's
+ *  robust range. One surface's spike must not zoom the others away, and a flat
+ *  plane at z = 0 must not collapse the box. */
+function frameZ(data) {
+  let lo = Infinity, hi = -Infinity;
+  const list = (data && data.surfaces) || [];
+  list.forEach(function (s) {
+    const r = (s && s.z_robust) || {};
+    const g = (s && s.z_range) || {};
+    const a = num(r.min) ? r.min : g.min;
+    const b = num(r.max) ? r.max : g.max;
+    if (num(a)) lo = Math.min(lo, a);
+    if (num(b)) hi = Math.max(hi, b);
+  });
+  if (!num(lo) || !num(hi)) return { min: -1, max: 1 };
+  if (hi - lo < 1e-9) hi = lo + 1e-9;   // a flat plane at z = c still frames
+  return { min: lo, max: hi };
+}
 
 // --- theme ------------------------------------------------------------------
 
@@ -453,6 +567,7 @@ function applyTheme(t) {
   btn.setAttribute('aria-label', label);
   if (scene) { scene.background = null; scene.fog = null; }
   if (group) buildSceneHelpers();   // axes/grid colours come from the theme
+  retintWires();                    // the wire colour came from a CSS var
   updateLights();
   requestRender();
 }
@@ -480,7 +595,9 @@ function clearError() { document.getElementById('error').hidden = true; }
 
 function surfaceQuery() {
   const p = new URLSearchParams();
-  p.append('formula', document.getElementById('formula').value.trim());
+  // Only the rows that carry a formula: the API filters empties anyway, and a
+  // share URL should not ship blank rows.
+  filledRows().forEach(function (row) { p.append('formula', rowValue(row)); });
   const pairs = [['x_min', 'xMin'], ['x_max', 'xMax'], ['y_min', 'yMin'], ['y_max', 'yMax']];
   pairs.forEach(function (pair) {
     const raw = document.getElementById(pair[1]).value.trim();
@@ -491,27 +608,60 @@ function surfaceQuery() {
   return p;
 }
 
+/** Full shareable URL: the API query plus each row's ramp and opacity — but
+ *  only when a row is off its default, and then as a FULL aligned list (the
+ *  same rule the 2D page uses for its colours, so position always means row). */
 function shareUrl() {
-  return location.origin + '/3d?' + surfaceQuery().toString()
-    + '&ramp=' + encodeURIComponent(document.getElementById('rampLow').value)
-    + '&ramp=' + encodeURIComponent(document.getElementById('rampHigh').value);
+  const p = surfaceQuery();
+  const filled = filledRows();
+  const ramps = filled.map(rowRamp);
+  const ops = filled.map(rowOpacity);
+  const rampOff = ramps.some(function (r, i) {
+    const d = rampFor(i);
+    return r[0] !== d[0] || r[1] !== d[1];
+  });
+  if (rampOff) {
+    ramps.forEach(function (r) {
+      p.append('ramp_low', r[0]);
+      p.append('ramp_high', r[1]);
+    });
+  }
+  if (ops.some(function (o) { return o !== 100; })) {
+    ops.forEach(function (o) { p.append('op', String(o)); });
+  }
+  return location.origin + '/3d?' + p.toString();
 }
 
 async function plot() {
   if (!renderer) return;
   clearError();
-  const formula = document.getElementById('formula').value.trim();
-  if (!formula) {
+  if (!filledRows().length) {
     showError('Enter a surface formula, e.g. z = sin(x) * cos(y).');
+    return;
+  }
+  const q = surfaceQuery();
+  const key = q.toString();
+  if (key === lastQuery && payload) {   // a blur + Enter submit is ONE plot
+    drawSurfaces();
+    return;
+  }
+  if (key === lastFailed) {
+    // The same query just failed; retrying cannot help (the formula is
+    // unchanged). Re-stating the error is what the second event expects to see
+    // — clearError() above just wiped it.
+    showError(lastFailedMsg);
     return;
   }
   document.getElementById('status').textContent = 'Solving…';
   let data;
   try {
-    const r = await fetch('/api/surface?' + surfaceQuery().toString());
+    const r = await fetch('/api/surface?' + key);
     const body = await r.json().catch(function () { return null; });
     if (!r.ok) {
-      showError('Cannot plot that: ' + errorText(body && body.detail !== undefined ? body.detail : body));
+      lastFailed = key;
+      lastFailedMsg = 'Cannot plot that: '
+        + errorText(body && body.detail !== undefined ? body.detail : body);
+      showError(lastFailedMsg);
       document.getElementById('status').textContent = '';
       return;
     }
@@ -523,62 +673,118 @@ async function plot() {
     document.getElementById('status').textContent = '';
     return;
   }
+  // The server drops empty formulas, so its list must line up with ours 1:1 —
+  // every ramp and opacity below is matched to a row BY POSITION.
+  if (data.formulas.length !== filledRows().length) {
+    showError('The server returned ' + data.formulas.length + ' surfaces for '
+      + filledRows().length + ' formulas — reload the page and try again.');
+    return;
+  }
   payload = data;
-  history.replaceState(null, '', '/3d?' + surfaceQuery().toString());
-  drawSurface();
+  lastQuery = key;
+  lastFailed = '';
+  history.replaceState(null, '', '/3d?' + key);
+  drawSurfaces();
 }
 
 // --- rendering --------------------------------------------------------------
 
-function drawSurface() {
+function drawSurfaces() {
   if (!renderer || !payload) return;
-  const xs = payload.x, ys = payload.y, s0 = payload.surfaces[0];
-  const zrb = s0.z_robust;
-  const zlo = num(zrb.min) ? zrb.min : s0.z_range.min;
-  const zhi = num(zrb.max) ? zrb.max : s0.z_range.max;
-  const rampLow = document.getElementById('rampLow').value;
-  const rampHigh = document.getElementById('rampHigh').value;
+  const xs = payload.x, ys = payload.y;
+  const filled = filledRows();
+  const frame = frameZ(payload);
 
   disposeGroup();
   group = new THREE.Group();
   scene.add(group);
+  meshes = [];
+  wireLines = [];
+  let holes = 0;
 
-  const buf = surfaceBuffers(xs, ys, s0.z, rampLow, rampHigh, zlo, zhi);
-  const geom = new THREE.BufferGeometry();
-  geom.setAttribute('position', new THREE.BufferAttribute(buf.position, 3));
-  geom.setAttribute('color', new THREE.BufferAttribute(buf.color, 3));
-  geom.setIndex(new THREE.BufferAttribute(buf.index, 1));
-  geom.computeVertexNormals();
+  payload.surfaces.forEach(function (s, i) {
+    const row = filled[i];
+    const ramp = row ? rowRamp(row) : rampFor(i);
+    const alpha = row ? rowOpacity(row) : 100;
+    const zrb = s.z_robust;
+    const zlo = num(zrb.min) ? zrb.min : s.z_range.min;
+    const zhi = num(zrb.max) ? zrb.max : s.z_range.max;
+    const buf = surfaceBuffers(xs, ys, s.z, ramp[0], ramp[1], zlo, zhi);
+    holes += buf.holes;
 
-  const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({
-    vertexColors: true, side: THREE.DoubleSide, roughness: 0.72, metalness: 0.04,
-    flatShading: false, transparent: true, opacity: 1.0,
-  }));
-  surfaceMesh = mesh;
-  group.add(mesh);
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(buf.position, 3));
+    geom.setAttribute('color', new THREE.BufferAttribute(buf.color, 3));
+    geom.setIndex(new THREE.BufferAttribute(buf.index, 1));
+    geom.computeVertexNormals();
 
-  const wgeom = new THREE.BufferGeometry();
-  wgeom.setAttribute('position', new THREE.BufferAttribute(buf.wire, 3));
-  wireLines = new THREE.LineSegments(wgeom, new THREE.LineBasicMaterial({
-    color: new THREE.Color(cssVar('--fg-soft', '#334155')),
-    transparent: true, opacity: 0.28,
-  }));
-  wireLines.visible = wireOn;
-  group.add(wireLines);
+    const open = alpha < 100;
+    const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({
+      vertexColors: true, side: THREE.DoubleSide, roughness: 0.72, metalness: 0.04,
+      flatShading: false,
+      transparent: open,
+      opacity: alpha / 100,
+      // A SEE-THROUGH surface must not write depth or it hides whatever is
+      // behind it; an opaque one MUST, so surfaces occlude each other properly.
+      // (three.js sorts transparent objects back-to-front, but a single
+      // transparent surface still blends its own back faces.)
+      depthWrite: !open,
+    }));
+    mesh.userData.rowIndex = i;
+    meshes.push(mesh);
+    group.add(mesh);
+
+    const wgeom = new THREE.BufferGeometry();
+    wgeom.setAttribute('position', new THREE.BufferAttribute(buf.wire, 3));
+    const wl = new THREE.LineSegments(wgeom, new THREE.LineBasicMaterial({
+      color: new THREE.Color(cssVar('--fg-soft', '#334155')),
+      transparent: true, opacity: 0.28,
+    }));
+    wl.visible = wireOn;
+    wireLines.push(wl);
+    group.add(wl);
+  });
 
   const fit = fitView(payload.x_range.min, payload.x_range.max,
-                      payload.y_range.min, payload.y_range.max, zlo, zhi);
+                      payload.y_range.min, payload.y_range.max, frame.min, frame.max);
   view.target = fit.target.slice();
   view.span = fit.span;
   view.distance = fit.distance;
+  lastFrame = frame;
   buildSceneHelpers();
+  renderLegend(filled);
 
-  const holes = buf.holes;
-  document.getElementById('status').textContent =
-    xs.length + ' × ' + ys.length + ' samples · z from ' + tickLabel(s0.z_range.min)
-    + ' to ' + tickLabel(s0.z_range.max)
-    + (holes ? ' · ' + holes + ' cell' + (holes === 1 ? '' : 's') + ' left out (no real z there)' : '');
+  const parts = [xs.length + ' \u00d7 ' + ys.length + ' samples'];
+  parts.push(payload.surfaces.length + (payload.surfaces.length === 1 ? ' surface' : ' surfaces'));
+  if (holes) parts.push(holes + ' cell' + (holes === 1 ? '' : 's') + ' left out (no real z there)');
+  document.getElementById('status').textContent = parts.join(' \u00b7 ');
   requestRender();
+}
+
+/** One legend chip per surface: a swatch showing that row's whole ramp (the
+ *  CSS-gradient idiom the 2D legend uses), its display form and its z span. */
+function renderLegend(filled) {
+  const el = document.getElementById('legend');
+  el.textContent = '';
+  if (!payload) return;
+  payload.surfaces.forEach(function (s, i) {
+    const row = filled[i];
+    const ramp = row ? rowRamp(row) : rampFor(i);
+    const item = document.createElement('span');
+    item.className = 'legend-item';
+    const dot = document.createElement('span');
+    dot.className = 'legend-dot';
+    dot.style.background = 'linear-gradient(90deg, ' + ramp[0] + ', ' + ramp[1] + ')';
+    const label = document.createElement('code');
+    label.textContent = s.display;
+    const meta = document.createElement('span');
+    meta.className = 'legend-meta';
+    meta.textContent = 'z ' + tickLabel(s.z_range.min) + '\u2026' + tickLabel(s.z_range.max);
+    item.appendChild(dot);
+    item.appendChild(label);
+    item.appendChild(meta);
+    el.appendChild(item);
+  });
 }
 
 function updateLights() {
@@ -713,7 +919,7 @@ function disposeObject(obj) {
 function disposeGroup() {
   if (axisGroup) { disposeObject(axisGroup); scene.remove(axisGroup); axisGroup = null; }
   if (group) { disposeObject(group); scene.remove(group); group = null; }
-  surfaceMesh = null; wireLines = null;
+  meshes = []; wireLines = [];
 }
 
 function applyCamera() {
@@ -739,12 +945,9 @@ function requestRender() {
 
 function resetView() {
   if (!payload) return;
-  const s0 = payload.surfaces[0];
-  const zrb = s0.z_robust;
   const fit = fitView(payload.x_range.min, payload.x_range.max,
                       payload.y_range.min, payload.y_range.max,
-                      num(zrb.min) ? zrb.min : s0.z_range.min,
-                      num(zrb.max) ? zrb.max : s0.z_range.max);
+                      lastFrame.min, lastFrame.max);
   view.target = fit.target.slice();
   view.span = fit.span;
   view.distance = fit.distance;
@@ -827,8 +1030,11 @@ function onWheel(e) {
 // --- export + share (client-side only — no server endpoint) -----------------
 
 function pngName() {
-  const f = document.getElementById('formula').value.trim().replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '');
-  return 'surface-' + (f || 'graph') + '.png';
+  const filled = filledRows();
+  const first = filled.length ? rowValue(filled[0]) : '';
+  const f = first.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '');
+  const extra = filled.length > 1 ? '-' + filled.length + '-surfaces' : '';
+  return 'surface-' + (f || 'graph') + extra + '.png';
 }
 
 function exportPng() {
@@ -876,33 +1082,143 @@ function setToggle(btn, on) {
   btn.setAttribute('aria-pressed', on ? 'true' : 'false');
 }
 
-function rampFromBox(swatchId, boxId) {
-  const box = document.getElementById(boxId);
+// --- the rows: add / duplicate / remove, and the per-row ramp + opacity ------
+
+/** Escape a value that is going into an attribute. A duplicated row copies the
+ *  user's own text, so this is not a defence against a stranger's payload — but
+ *  a formula containing a quote must not break the row's markup. */
+function attrEscape(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function rowMarkup(ramp, opacity, formula) {
+  return '<input type="text" class="formula-input" spellcheck="false" autocomplete="off"'
+    + ' value="' + attrEscape(formula) + '" placeholder="e.g. z = sin(x) * cos(y)" aria-label="Surface formula">'
+    + '<span class="ramp" title="This surface\'s height ramp — the colour at its lowest z, then at its highest z">'
+    + '<input type="color" class="ramp-low" value="' + ramp[0] + '" aria-label="Low-z colour">'
+    + '<input type="text" class="hex-ramp hex-low" value="' + ramp[0] + '" spellcheck="false" autocomplete="off" maxlength="7" aria-label="Low-z colour as hex">'
+    + '<span class="ramp-arrow" aria-hidden="true">&#8594;</span>'
+    + '<input type="color" class="ramp-high" value="' + ramp[1] + '" aria-label="High-z colour">'
+    + '<input type="text" class="hex-ramp hex-high" value="' + ramp[1] + '" spellcheck="false" autocomplete="off" maxlength="7" aria-label="High-z colour as hex">'
+    + '</span>'
+    + '<span class="ctr op-ctr" title="This surface\'s opacity in percent (0–100, default 100) — lower it to see a surface inside another one">'
+    + '<span class="ctr-axis"><label class="ctr-lbl">%</label>'
+    + '<input type="number" class="opacity-pick" value="' + opacity + '" placeholder="100" min="0" max="100" step="5" aria-label="Surface opacity in percent"></span></span>'
+    + '<button type="button" class="row-dup" title="Duplicate this surface as a new row below — same ramp and opacity" aria-label="Duplicate this surface">'
+    + '<svg class="ico sm" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="s" d="M11.9 4.2H4.6A1.4 1.4 0 0 0 3.2 5.6v7.3"/><rect class="s" x="6.1" y="6.1" width="8.7" height="8.7" rx="1.7"/></svg></button>'
+    + '<button type="button" class="row-del" title="Remove this surface" aria-label="Remove this surface">'
+    + '<svg class="ico sm" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path class="s" d="M4.8 4.8 13.2 13.2M13.2 4.8 4.8 13.2"/></svg></button>';
+}
+
+/** Append a row. `seed` carries an existing row's formula/ramp/opacity (the
+ *  duplicate button); with no seed the row is EMPTY and gets the next default
+ *  ramp — an empty row is skipped by the query, so adding one cannot break the
+ *  plot the user is looking at.
+ *
+ *  The markup is built here rather than by cloneNode(true) — a clone copies no
+ *  listeners, which is why every row control hangs off ONE delegated listener
+ *  on #surfaceRows (the 2D page shipped a dead remove button for exactly this). */
+function addSurfaceRow(seed) {
+  if (rows().length >= MAX_ROWS) return null;
+  const n = rows().length;
+  const div = document.createElement('div');
+  div.className = 'surface-row';
+  div.innerHTML = rowMarkup(
+    (seed && seed.ramp) || rampFor(n),
+    seed && seed.opacity != null ? seed.opacity : 100,
+    seed && seed.formula ? seed.formula
+      : ''
+  );
+  document.getElementById('surfaceRows').appendChild(div);
+  onRowsChanged();
+  return div;
+}
+
+/** Show/hide the row buttons: the last row cannot be removed, and once the
+ *  ceiling is reached no row can be duplicated and Add disappears. */
+function onRowsChanged() {
+  const all = rows();
+  const full = all.length >= MAX_ROWS;
+  all.forEach(function (row) {
+    row.querySelector('.row-del').hidden = all.length === 1;
+    row.querySelector('.row-dup').hidden = full;
+  });
+  const add = document.getElementById('addRowBtn');
+  if (add) add.hidden = full;
+}
+
+function duplicateRow(row) {
+  if (rows().length >= MAX_ROWS) return;
+  const clone = addSurfaceRow({ formula: rowValue(row), ramp: rowRamp(row), opacity: rowOpacity(row) });
+  if (clone) plot();
+}
+
+/** Swatch -> its hex box (the swatch is the source of truth). */
+function syncHex(row, swatch) {
+  const isLow = swatch.classList.contains('ramp-low');
+  const box = row.querySelector(isLow ? '.hex-low' : '.hex-high');
+  if (box) box.value = swatch.value;
+}
+
+/** Hex box -> its swatch, normalised to #rrggbb. Returns false (and restores
+ *  the box) on anything that is not hex, so a half-typed value can never reach
+ *  the canvas or the share URL. */
+function applyHex(row, box) {
+  const isLow = box.classList.contains('hex-low');
+  const swatch = row.querySelector(isLow ? '.ramp-low' : '.ramp-high');
   const rgb = parseHex(box.value);
   if (!rgb) {
     toast('Use a hex colour like #2563eb');
-    box.value = document.getElementById(swatchId).value;
+    box.value = swatch.value;
     return false;
   }
   const hex = '#' + rgb.map(function (c) { return ('0' + c.toString(16)).slice(-2); }).join('');
-  document.getElementById(swatchId).value = hex;
+  swatch.value = hex;
   box.value = hex;
   return true;
 }
 
-function recolor() {
-  // A ramp change is presentation only: rebuild the colour attribute from the
-  // payload we already have, with no refetch.
-  if (!payload) return;
-  const s0 = payload.surfaces[0];
-  const zrb = s0.z_robust;
-  const zlo = num(zrb.min) ? zrb.min : s0.z_range.min;
-  const zhi = num(zrb.max) ? zrb.max : s0.z_range.max;
-  const buf = surfaceBuffers(payload.x, payload.y, s0.z,
-    document.getElementById('rampLow').value, document.getElementById('rampHigh').value, zlo, zhi);
-  surfaceMesh.geometry.setAttribute('color', new THREE.BufferAttribute(buf.color, 3));
-  surfaceMesh.geometry.attributes.color.needsUpdate = true;
+/** Opacity is presentation only: retint the material in place, no refetch. */
+function applyOpacity(row) {
+  const i = rows().indexOf(row);
+  const mesh = meshes[i];
+  if (!mesh) return;
+  const alpha = rowOpacity(row) / 100;
+  const open = alpha < 1;
+  mesh.material.opacity = alpha;
+  mesh.material.transparent = open;
+  mesh.material.depthWrite = !open;
+  mesh.material.needsUpdate = true;
   requestRender();
+}
+
+function recolor() {
+  // A ramp change is presentation only: rebuild each surface's colour attribute
+  // from the payload we already have, with no refetch.
+  if (!payload) return;
+  const filled = filledRows();
+  payload.surfaces.forEach(function (s, i) {
+    const mesh = meshes[i], row = filled[i];
+    if (!mesh || !row) return;
+    const zrb = s.z_robust;
+    const buf = surfaceBuffers(payload.x, payload.y, s.z,
+      rowRamp(row)[0], rowRamp(row)[1],
+      num(zrb.min) ? zrb.min : s.z_range.min,
+      num(zrb.max) ? zrb.max : s.z_range.max);
+    mesh.geometry.setAttribute('color', new THREE.BufferAttribute(buf.color, 3));
+    mesh.geometry.attributes.color.needsUpdate = true;
+  });
+  renderLegend(filled);
+  requestRender();
+}
+
+/** Keep the wire colour in step with the theme (it is read from a CSS var when
+ *  the line is created, so a theme switch would otherwise leave it stale). */
+function retintWires() {
+  const c = new THREE.Color(cssVar('--fg-soft', '#334155'));
+  wireLines.forEach(function (l) { l.material.color.copy(c); });
 }
 
 function boot() {
@@ -955,7 +1271,7 @@ function boot() {
   document.getElementById('wireBtn').addEventListener('click', function () {
     wireOn = !wireOn;
     setToggle(this, wireOn);
-    if (wireLines) wireLines.visible = wireOn;
+    wireLines.forEach(function (l) { l.visible = wireOn; });
     requestRender();
   });
   document.getElementById('gridBtn').addEventListener('click', function () {
@@ -972,27 +1288,60 @@ function boot() {
   });
   document.querySelectorAll('#samples .chip').forEach(function (chip) {
     chip.addEventListener('click', function () {
-      document.getElementById('formula').value = chip.textContent;
+      // Into the row the user last touched (row 1 by default), so a second
+      // surface can be built from a sample without retyping the first.
+      const row = activeRowEl || rows()[0];
+      if (!row) return;
+      row.querySelector('.formula-input').value = chip.textContent;
       plot();
     });
   });
-  ['rampLow', 'rampHigh'].forEach(function (id, idx) {
-    const boxId = idx === 0 ? 'hexLow' : 'hexHigh';
-    document.getElementById(id).addEventListener('input', function () {
-      document.getElementById(boxId).value = this.value;
-      recolor();
-    });
+
+  // ONE delegated listener per event type for everything inside a row. A
+  // per-row listener would be lost the moment a row is added or duplicated.
+  const host = document.getElementById('surfaceRows');
+  host.addEventListener('click', function (e) {
+    const row = e.target.closest('.surface-row');
+    if (!row) return;
+    if (e.target.closest('.row-dup')) { duplicateRow(row); return; }
+    if (e.target.closest('.row-del')) {
+      if (rows().length > 1) { row.remove(); onRowsChanged(); plot(); }
+    }
   });
-  ['hexLow', 'hexHigh'].forEach(function (boxId, idx) {
-    const swatchId = idx === 0 ? 'rampLow' : 'rampHigh';
-    const apply = function () {
-      if (rampFromBox(swatchId, boxId)) recolor();
-    };
-    document.getElementById(boxId).addEventListener('change', apply);
-    document.getElementById(boxId).addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') { apply(); e.preventDefault(); }
-    });
+  host.addEventListener('focusin', function (e) {
+    const row = e.target.closest('.surface-row');
+    if (row) activeRowEl = row;
   });
+  host.addEventListener('input', function (e) {
+    const row = e.target.closest('.surface-row');
+    if (!row) return;
+    const cls = e.target.classList;
+    if (cls.contains('ramp-low') || cls.contains('ramp-high')) { syncHex(row, e.target); recolor(); return; }
+    if (cls.contains('hex-ramp')) { if (applyHex(row, e.target)) recolor(); return; }
+    if (cls.contains('opacity-pick')) { applyOpacity(row); return; }
+  });
+  host.addEventListener('change', function (e) {
+    const row = e.target.closest('.surface-row');
+    if (!row) return;
+    const cls = e.target.classList;
+    if (cls.contains('hex-ramp')) { if (applyHex(row, e.target)) recolor(); return; }
+    // Editing a formula then clicking away (or pressing Enter) replots. plot()
+    // dedupes on the query string, so the Enter-triggered submit that follows
+    // does not fetch a second time.
+    if (cls.contains('formula-input')) plot();
+  });
+  host.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || !e.target.classList.contains('hex-ramp')) return;
+    const row = e.target.closest('.surface-row');
+    if (row && applyHex(row, e.target)) recolor();
+    e.preventDefault();
+  });
+  document.getElementById('addRowBtn').addEventListener('click', function () {
+    const row = addSurfaceRow(null);
+    if (row) { activeRowEl = row; row.querySelector('.formula-input').focus(); }
+  });
+  activeRowEl = rows()[0] || null;
+  onRowsChanged();
   setToggle(document.getElementById('wireBtn'), wireOn);
   setToggle(document.getElementById('gridBtn'), gridOn);
   setToggle(document.getElementById('axisBtn'), axesOn);
@@ -1030,8 +1379,8 @@ if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator
 var __api = {
   num: num, clamp01: clamp01, heightT: heightT, parseHex: parseHex, mixRgb: mixRgb,
   srgbToLinear: srgbToLinear, niceStep: niceStep, niceTicks: niceTicks, tickLabel: tickLabel,
-  fitView: fitView, clampPolar: clampPolar, camPos: camPos,
-  surfaceBuffers: surfaceBuffers, errorText: errorText,
+  fitView: fitView, clampPolar: clampPolar, camPos: camPos, rampFor: rampFor, frameZ: frameZ,
+  surfaceBuffers: surfaceBuffers, errorText: errorText, attrEscape: attrEscape,
 };
 </script>
 </body>

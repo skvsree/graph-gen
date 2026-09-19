@@ -23,7 +23,7 @@ from . import solver
 
 log = logging.getLogger("xy-graph-gen")
 
-app = FastAPI(title="xy-graph-gen", version="0.10.0")
+app = FastAPI(title="xy-graph-gen", version="0.11.0")
 
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
@@ -44,9 +44,19 @@ MODES = {"cartesian", "polar"}
 # untouched. The two pages share the solver (eval_ast2), the colour scheme and
 # the URL-state conventions.
 DEFAULT_SURFACE_FORMULA = "z = x^2 - y^2"
-# Height ramp: the colour at the LOWEST z and at the HIGHEST z. Same
-# start->end idea as the 2D page's per-row gradient, so both pages read alike.
-DEFAULT_SURFACE_RAMP = ["#2563eb", "#dc2626"]
+# Height ramp per ROW: the colour at the LOWEST z and at the HIGHEST z of that
+# surface. Row 1's pair is the original default; the rest exist so a second
+# surface is a different colour instead of a carbon copy of the first. MUST
+# mirror the JS `SURFACE_RAMPS` array in templates/three.html —
+# test_template_surface_ramps_match_server keeps the two in lockstep.
+SURFACE_RAMPS = [
+    ["#2563eb", "#dc2626"],   # blue -> red
+    ["#059669", "#facc15"],   # green -> amber
+    ["#7c3aed", "#ec4899"],   # violet -> pink
+    ["#0891b2", "#f97316"],   # cyan -> orange
+    ["#475569", "#cbd5e1"],   # slate -> light
+]
+DEFAULT_SURFACE_RAMP = SURFACE_RAMPS[0]
 SURFACE_GRID_MIN = 4
 _GRID_MAX = solver.SURFACE_GRID_MAX  # one source of truth for the cap
 
@@ -327,16 +337,33 @@ def _clean_rotations(raw: list[str], n: int) -> list[str]:
     return rotations
 
 
-def _clean_ramp(raw: list[str]) -> list[str]:
-    """Validate repeated ``ramp`` params (low-z colour, high-z colour).
+def _clean_surface_ramps(
+    lows: list[str], highs: list[str], legacy: list[str], n: int
+) -> list[list[str]]:
+    """Validate the per-row ramp params (``ramp_low``/``ramp_high``, repeated).
 
-    Missing/invalid entries fall back to ``DEFAULT_SURFACE_RAMP`` position by
-    position, so a hand-written ``?ramp=`` param can never inject markup.
+    Each row gets a PAIR: the colour at that surface's lowest z, then at its
+    highest z. A missing/invalid entry falls back to that ROW's default pair —
+    never to another row's colour, which would silently paint two surfaces the
+    same and make them look like one.
+
+    ``legacy`` is the older single ``?ramp=#a&ramp=#b`` pair (the first release
+    used one ramp for the one surface), still honoured for the FIRST row so
+    links shared before per-row ramps keep rendering.
     """
-    out = []
-    for i in range(2):
-        c = raw[i].strip().lower() if i < len(raw) else ""
-        out.append(c if _COLOR_RE.fullmatch(c) else DEFAULT_SURFACE_RAMP[i])
+    out: list[list[str]] = []
+    for i in range(n):
+        default = SURFACE_RAMPS[i % len(SURFACE_RAMPS)]
+        pair = []
+        for slot, raw in enumerate((lows, highs)):
+            v = raw[i].strip().lower() if i < len(raw) else ""
+            if not _COLOR_RE.fullmatch(v):
+                v = ""
+            if not v and i == 0 and slot < len(legacy):
+                cand = legacy[slot].strip().lower()
+                v = cand if _COLOR_RE.fullmatch(cand) else ""
+            pair.append(v or default[slot])
+        out.append(pair)
     return out
 
 
@@ -521,29 +548,37 @@ def index(
 def three_d(
     request: Request,
     formula: list[str] = Query(default=[DEFAULT_SURFACE_FORMULA]),
+    ramp: list[str] = Query(default=[]),
+    ramp_low: list[str] = Query(default=[]),
+    ramp_high: list[str] = Query(default=[]),
+    op: list[str] = Query(default=[]),
     x_min: str | None = None,
     x_max: str | None = None,
     y_min: str | None = None,
     y_max: str | None = None,
     grid: str | None = None,
-    ramp: list[str] = Query(default=[]),
 ) -> HTMLResponse:
     """Render the 3D surface page (``z = f(x, y)`` drawn with three.js).
 
     Repeated ``?formula=…`` params pre-fill the surface rows (max
-    MAX_FORMULAS, same as the 2D page). ``x_min``/``x_max``/``y_min``/``y_max``
-    set the sampling window, ``grid`` the cells per axis, and repeated
-    ``?ramp=#rrggbb&ramp=#rrggbb`` the height ramp (colour at the lowest z,
-    then at the highest z). Every value is validated and kept as a STRING so
-    it round-trips through the share URL exactly as typed.
+    MAX_FORMULAS, same as the 2D page). Repeated ``?ramp_low=#rrggbb`` /
+    ``?ramp_high=#rrggbb`` params set each row's height ramp (the colour at that
+    surface's lowest z, then at its highest z) and repeated ``?op=`` params its
+    opacity (percent 0..100, default 100) — lower it to see one surface inside
+    another. ``?ramp=`` is the LEGACY single-surface pair, still honoured for
+    the first row. ``x_min``/``x_max``/``y_min``/``y_max`` set the sampling
+    window and ``grid`` the cells per axis. Every value is validated and kept as
+    a STRING so it round-trips through the share URL exactly as typed.
     """
     formulas = _clean_formulas(formula) or [DEFAULT_SURFACE_FORMULA]
+    n = len(formulas[:MAX_FORMULAS])
     resp = templates.TemplateResponse(
         request=request,
         name="three.html",
         context={
             "formulas": formulas[:MAX_FORMULAS],
-            "ramp": _clean_ramp(ramp),
+            "ramps": _clean_surface_ramps(ramp_low, ramp_high, ramp, n),
+            "opacities": _clean_opacities(op, n),
             "x_min": (x_min or "").strip() if _NUM_RE.fullmatch((x_min or "").strip()) else "",
             "x_max": (x_max or "").strip() if _NUM_RE.fullmatch((x_max or "").strip()) else "",
             "y_min": (y_min or "").strip() if _NUM_RE.fullmatch((y_min or "").strip()) else "",
@@ -552,6 +587,7 @@ def three_d(
             "default_grid": solver.SURFACE_GRID_DEFAULT,
             "grid_min": SURFACE_GRID_MIN,
             "grid_max": _GRID_MAX,
+            "max_rows": MAX_FORMULAS,
             "app_version": app.version,
         },
     )

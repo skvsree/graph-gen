@@ -32,8 +32,8 @@ vm.runInContext(m[1], sandbox);
 const {
   num, clamp01, heightT, parseHex, mixRgb,
   srgbToLinear, niceStep, niceTicks, tickLabel,
-  fitView, clampPolar, camPos,
-  surfaceBuffers, errorText,
+  fitView, clampPolar, camPos, rampFor, frameZ,
+  surfaceBuffers, errorText, attrEscape,
 } = sandbox.__api;
 
 let failures = 0;
@@ -206,6 +206,39 @@ check('clampPolar passes a normal angle through', clampPolar(1), 1);
   check('an unparsable ramp still builds', b.position.length, 12);
   check('an unparsable ramp falls back to black', Array.from(b.color.slice(0, 3)), [0, 0, 0]);
 }
+
+// --- multiple surfaces ------------------------------------------------------
+// Default ramp per row: a second surface must not be a carbon copy of the first.
+check('rampFor(0) is the original pair', rampFor(0), ['#2563eb', '#dc2626']);
+check('rampFor(1) is a different pair', rampFor(1), ['#059669', '#facc15']);
+check('rampFor wraps past the end', rampFor(5), rampFor(0));
+check('rampFor hands back a fresh copy each call', rampFor(0) === rampFor(0), false);
+{
+  rampFor(0)[0] = '#000000';
+  check('mutating a rampFor result cannot poison the table', rampFor(0)[0], '#2563eb');
+}
+{
+  // The framing z window is the UNION of every surface's robust range: one
+  // surface's spike must not zoom the others away, and a flat plane at z = 0
+  // must not collapse the box.
+  const data = {
+    surfaces: [
+      { z_range: { min: -25, max: 25 }, z_robust: { min: -23.4, max: 23.4 } },
+      { z_range: { min: 0, max: 50 }, z_robust: { min: 0, max: 44 } },
+    ],
+  };
+  check('frameZ spans every surface', frameZ(data), { min: -23.4, max: 44 });
+}
+check('frameZ of a flat plane stays finite', frameZ({
+  surfaces: [{ z_range: { min: 0, max: 0 }, z_robust: { min: 0, max: 0 } }],
+}), { min: 0, max: 1e-9 });
+check('frameZ survives a missing range', frameZ({ surfaces: [{}] }), { min: -1, max: 1 });
+
+// --- attribute escaping (the duplicate button copies a formula into markup) --
+check('attrEscape escapes a quote', attrEscape('z = "x"'), 'z = &quot;x&quot;');
+check('attrEscape escapes the tag characters', attrEscape('<script>'), '&lt;script&gt;');
+check('attrEscape escapes an ampersand', attrEscape('a&b'), 'a&amp;b');
+check('attrEscape handles null', attrEscape(null), '');
 
 // --- error shapes -----------------------------------------------------------
 // FastAPI's 422 detail is an ARRAY of objects: rendering it straight into

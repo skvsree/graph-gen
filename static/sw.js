@@ -24,7 +24,7 @@
  * controllerchange handler in templates/index.html.
  */
 
-const VERSION = 'v15';
+const VERSION = 'v16';
 const SHELL_CACHE = 'xygg-shell-' + VERSION;
 const API_CACHE = 'xygg-api-' + VERSION;
 const FONT_CACHE = 'xygg-fonts-' + VERSION;

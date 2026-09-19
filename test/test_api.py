@@ -1292,7 +1292,7 @@ def test_service_worker_caches_the_vendored_muxer():
     """The MP4 export must keep working offline in the installed PWA."""
     sw = client.get("/sw.js").text
     assert "startsWith('/vendor/')" in sw
-    assert "const VERSION = 'v15';" in sw
+    assert "const VERSION = 'v16';" in sw
 
 
 def test_service_worker_caches_both_pages_and_the_surface_api():
@@ -1570,17 +1570,33 @@ def test_three_template_has_no_server_side_export_path():
     assert "drawImage(src, 0, 0)" in text   # composited onto the card colour
 
 
-def test_three_template_ramp_is_one_pair_and_recolours_without_a_refetch():
+def test_three_template_ramp_is_one_pair_per_row_and_recolours_without_a_refetch():
     text = THREE_TEMPLATE.read_text()
-    assert 'class="ramp-low" id="rampLow"' in text
-    assert 'class="ramp-high" id="rampHigh"' in text
-    assert 'class="hex-ramp" id="hexLow"' in text
-    assert 'class="hex-ramp" id="hexHigh"' in text
-    # A device colour dialog is not enough on Android: both ends also take a
-    # hex box, and the swatch stays the single source of truth.
-    assert "document.getElementById(swatchId).value = hex;" in text
-    # Colour changes must not re-fetch the grid.
-    assert "surfaceMesh.geometry.setAttribute('color'" in text
+    # The id rides on the FIRST row only (the rest are class-addressed), so the
+    # source carries the conditional — assert the two facts, not their order.
+    for cls, ident in (("ramp-low", "rampLow"), ("ramp-high", "rampHigh"),
+                       ("hex-ramp hex-low", "hexLow"), ("hex-ramp hex-high", "hexHigh")):
+        assert 'class="%s"' % cls in text, cls
+        assert 'id="%s"' % ident in text, ident
+    # A device colour dialog is not enough on Android: every ramp end also takes
+    # a hex box, and the swatch stays the single source of truth.
+    assert "swatch.value = hex;" in text
+    assert "box.value = swatch.value;" in text
+    # Colour changes must not re-fetch the grid — one colour attribute per mesh.
+    assert "mesh.geometry.setAttribute('color'" in text
+
+
+def test_template_max_rows_matches_server():
+    """MAX_ROWS is a plain literal in the JS (a Jinja placeholder there would be
+    invalid JavaScript, and the node suite RUNS that script)."""
+    from app.main import MAX_FORMULAS
+    text = THREE_TEMPLATE.read_text()
+    m = re.search(r"const MAX_ROWS = (\d+);", text)
+    assert m is not None, "three.html must define MAX_ROWS"
+    assert int(m.group(1)) == MAX_FORMULAS
+    # No Jinja may leak into the script: the node suite evaluates it verbatim.
+    script = re.search(r"<script>(.*?)</script>", text, re.S).group(1)
+    assert "{{" not in script and "{%" not in script
 
 
 def test_three_template_exposes_every_pure_helper_to_the_js_suite():
@@ -1599,6 +1615,156 @@ def test_three_template_exposes_every_pure_helper_to_the_js_suite():
     assert m2 is not None, "three.test.js must destructure sandbox.__api"
     used = {k.strip() for k in m2.group(1).split(",") if k.strip()}
     assert exposed == used, "three.html and three.test.js disagree: " + str(exposed ^ used)
+
+
+def _rows_html(page_html: str) -> str:
+    """The `#surfaceRows` block of a rendered /3d page.
+
+    Scoped like this because the page also ships its JS, and the JS contains the
+    same class names inside `rowMarkup` — counting them page-wide inflates every
+    number (a 5-row page counted 12 "Duplicate this surface")."""
+    m = re.search(r'<div id="surfaceRows">(.*?)<div class="range-row">', page_html, re.S)
+    assert m is not None, "no #surfaceRows block in the page"
+    return m.group(1)
+
+
+def test_3d_page_renders_one_row_per_formula():
+    r = client.get("/3d", params=[("formula", "z = x^2 + y^2"), ("formula", "z = 0")])
+    assert r.status_code == 200
+    assert r.text.count('class="surface-row"') == 2
+    rows_html = _rows_html(r.text)
+    for cls in ('formula-input', 'ramp-low', 'hex-ramp hex-low', 'ramp-high',
+                'hex-ramp hex-high', 'opacity-pick', 'row-dup', 'row-del'):
+        assert rows_html.count('class="%s"' % cls) == 2, cls
+    # A 2-row page can remove either row, so neither remove button is hidden.
+    assert 'aria-label="Remove this surface" hidden' not in rows_html
+    # The single-row case cannot remove its only row, and shows the Add button.
+    one = client.get("/3d")
+    assert 'class="add-btn" id="addRowBtn"' in one.text
+    assert 'id="addRowBtn" title="Add another surface (max 5)">' in one.text
+    assert 'aria-label="Remove this surface" hidden>' in _rows_html(one.text)
+
+
+def test_3d_page_hides_add_and_duplicate_at_the_ceiling():
+    r = client.get("/3d", params=[("formula", f"z = x + {i}") for i in range(5)])
+    assert r.text.count('class="surface-row"') == 5
+    assert 'id="addRowBtn" title="Add another surface (max 5)" hidden>' in r.text
+    rows_html = _rows_html(r.text)
+    assert rows_html.count('aria-label="Duplicate this surface" hidden>') == 5
+    assert rows_html.count('class="row-dup"') == 5
+
+
+def test_3d_page_per_row_ramps_from_query_params():
+    r = client.get("/3d", params=[
+        ("formula", "z = x"), ("formula", "z = y"), ("formula", "z = x*y"),
+        ("ramp_low", "#111111"), ("ramp_low", "#222222"),
+        ("ramp_high", "#333333"), ("ramp_high", "#444444"),
+    ])
+    assert r.status_code == 200
+    assert r.text.count('value="#111111"') == 2   # row 0 low: swatch + hex box
+    assert 'value="#333333"' in r.text
+    assert 'value="#222222"' in r.text
+    assert 'value="#444444"' in r.text
+    # Row 3 had no ramp params, so it keeps its OWN default pair — falling back
+    # to row 1's colours would paint two surfaces the same.
+    from app.main import SURFACE_RAMPS
+    assert 'value="%s"' % SURFACE_RAMPS[2][0] in r.text
+    assert 'value="%s"' % SURFACE_RAMPS[2][1] in r.text
+
+
+def test_3d_page_ramp_defaults_are_per_row():
+    r = client.get("/3d", params=[("formula", "z = x"), ("formula", "z = y")])
+    from app.main import SURFACE_RAMPS
+    assert SURFACE_RAMPS[0] != SURFACE_RAMPS[1]
+    assert 'id="rampLow" value="%s"' % SURFACE_RAMPS[0][0] in r.text
+    # Row 2's default pair is ITS pair, not row 1's.
+    assert r.text.count('value="%s"' % SURFACE_RAMPS[1][0]) == 2  # swatch + hex box
+
+
+def test_3d_page_legacy_ramp_param_still_sets_the_first_row():
+    """`?ramp=#a&ramp=#b` was the single-surface API for one release; links
+    shared then must still render."""
+    r = client.get("/3d", params=[("formula", "z = x"), ("formula", "z = y"),
+                                  ("ramp", "#abcdef"), ("ramp", "#fedcba")])
+    assert 'id="rampLow" value="#abcdef"' in r.text
+    assert 'id="rampHigh" value="#fedcba"' in r.text
+    # ...and it must NOT leak onto the second row.
+    from app.main import SURFACE_RAMPS
+    assert r.text.count('value="#abcdef"') == 2   # row 0's swatch + hex box only
+    assert SURFACE_RAMPS[1][0] in r.text
+
+
+def test_3d_page_opacity_params():
+    r = client.get("/3d", params=[("formula", "z = x"), ("formula", "z = y"),
+                                  ("op", "40"), ("op", "bogus")])
+    assert 'class="opacity-pick" id="op0" value="40"' in r.text
+    assert 'class="opacity-pick" id="op1" value="100"' in r.text   # invalid -> default
+
+
+def test_3d_page_escapes_every_row_against_xss():
+    r = client.get("/3d", params=[("formula", "<script>alert(1)</script>"),
+                                  ("formula", 'z = "x"')])
+    assert r.status_code == 200
+    assert "<script>alert(1)</script>" not in r.text
+    assert "&lt;script&gt;" in r.text
+    # A quote in a formula must not break out of the value attribute.
+    assert 'value="z = &#34;x&#34;"' in r.text
+
+
+def test_template_surface_ramps_match_server():
+    """The per-row default ramps live in BOTH twins (the server pre-renders the
+    rows, the page builds new ones). Same lockstep rule as CURVE_PALETTE."""
+    from app.main import SURFACE_RAMPS
+    text = THREE_TEMPLATE.read_text()
+    m = re.search(r"const SURFACE_RAMPS = \[(.*?)\];", text, re.S)
+    assert m is not None, "three.html must define SURFACE_RAMPS"
+    pairs = [[a, b] for a, b in re.findall(r"\['(#[0-9a-f]{6})', '(#[0-9a-f]{6})'\]", m.group(1))]
+    assert pairs == [list(p) for p in SURFACE_RAMPS]
+    assert len(pairs) >= 5, "there must be a default pair for every possible row"
+
+
+def test_three_template_js_row_builder_mirrors_the_server_row():
+    """A row added in the browser must be the SAME row the server renders —
+    same controls, same classes, same icons — or a JS-added row loses its CSS
+    or its buttons (the 2D pen menu once shipped into the DOM with no CSS)."""
+    text = THREE_TEMPLATE.read_text()
+    server = re.search(r'<div class="surface-row">(.*?)</div>', text, re.S).group(1)
+    m = re.search(r"function rowMarkup\(ramp, opacity, formula\) \{(.*?)\n\}", text, re.S)
+    assert m is not None, "rowMarkup must exist"
+    builder = m.group(1)
+    for cls in ('formula-input', 'ramp-low', 'hex-ramp hex-low', 'ramp-high',
+                'hex-ramp hex-high', 'opacity-pick', 'row-dup', 'row-del'):
+        assert cls in server, 'the server row is missing ' + cls
+        assert cls in builder, 'rowMarkup is missing ' + cls
+    for shared in ('<span class="ramp"', '<span class="ramp-arrow"', '<span class="ctr-axis">',
+                   '<svg class="ico sm"', 'aria-label='):
+        assert shared in server and shared in builder, shared
+
+
+def test_three_template_row_controls_are_styled():
+    """Row controls must not ship as raw UA elements: scoped `.form .<class>`
+    rules for the buttons, `.ico` for the SVG icons, and the row a flex line."""
+    text = THREE_TEMPLATE.read_text()
+    css = text.split("</style>")[0]
+    assert ".form .row-del, .form .row-dup {" in css
+    assert ".form .row-del:hover" in css and ".form .row-dup:hover" in css
+    assert ".form .add-btn {" in css
+    assert ".ico .s { fill: none; stroke: currentColor" in css
+    assert "#surfaceRows { display: flex; flex-direction: column" in css
+    assert ".legend-dot {" in css
+
+
+def test_api_surface_returns_every_formula_in_order():
+    r = client.get("/api/surface", params=[("formula", "z = x"), ("formula", "z = -x"),
+                                           ("formula", "z = 0"), ("grid", "4")])
+    assert r.status_code == 200
+    d = r.json()
+    assert [s["display"] for s in d["surfaces"]] == ["z = x", "z = -x", "z = 0"]
+    # Each surface carries its own ranges — the page normalises each row's ramp
+    # against ITS OWN z range, so a flat plane at z = 0 is still a full ramp.
+    flat = d["surfaces"][2]
+    assert flat["z_range"] == {"min": 0.0, "max": 0.0}
+    assert flat["z_robust"]["min"] == 0.0 and flat["z_robust"]["max"] == 0.0
 
 
 def test_three_js_suite_is_in_the_documented_test_commands():
